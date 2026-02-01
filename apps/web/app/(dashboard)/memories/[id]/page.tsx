@@ -42,11 +42,11 @@ export default function MemoryDetailPage({ params }: MemoryDetailPageProps) {
     return <Card className="p-4 text-sm text-destructive">{error}</Card>;
   }
 
-  if (!entry && !loaded) {
+  if (!loaded) {
     return <Card className="p-4 text-sm text-muted-foreground">Loading entry...</Card>;
   }
 
-  if (!entry && loaded) {
+  if (!entry) {
     return <Card className="p-4 text-sm text-muted-foreground">Entry not found.</Card>;
   }
 
@@ -60,7 +60,7 @@ export default function MemoryDetailPage({ params }: MemoryDetailPageProps) {
         <CardHeader>
           <CardTitle className="text-lg">{formatDisplayDate(entry.entry_date)}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Mood: {entry.mood ?? "—"} · {entry.time_budget} min
+            Mood: {entry.mood ?? "-"} | {entry.time_budget} min
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm text-muted-foreground whitespace-pre-wrap">
