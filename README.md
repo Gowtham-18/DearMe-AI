@@ -1,50 +1,61 @@
-﻿# DearMe AI
+﻿# DearMe AI Monorepo
 
-AI-powered journaling companion with a Next.js web app and FastAPI NLP service.
+AI-powered journaling companion with a Next.js web app, FastAPI NLP service, and Supabase persistence.
 
 ## Overview
 - apps/web: Next.js (App Router, TypeScript) UI
-- services/nlp: FastAPI NLP service (skeleton)
-- packages/shared: shared types and schemas
-- docs: architecture notes and threat model
+- services/nlp: FastAPI service (skeleton)
+- packages/shared: shared types and Zod schemas
+- docs: architecture notes, threat model, and database schema
 
 ## Tech Stack
 - Next.js + React + TypeScript
 - Tailwind CSS + shadcn/ui
-- next-themes, recharts, lucide-react
+- Supabase (Postgres)
 - FastAPI + Pydantic
 
 ## Local Development
 ### Prereqs
 - Node.js 20+
-- pnpm 9+
+- pnpm 10+
 - Python 3.11+
 
-### Install dependencies
+### Web app
 ```
+cd apps/web
 pnpm install
-```
-
-### NLP service setup
-```
-python -m venv services/nlp/.venv
-services/nlp/.venv/Scripts/activate
-pip install -r services/nlp/requirements.txt
-```
-
-### Run web + NLP service
-```
 pnpm dev
+```
+
+### NLP service
+```
+cd services/nlp
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
 ```
 
 Web runs at http://localhost:3000
 NLP runs at http://localhost:8000
 
-### Run separately
+### Run everything from root
 ```
-pnpm dev:web
-pnpm dev:nlp
+pnpm dev
 ```
+
+## Supabase Setup
+1) Create a Supabase project.
+2) In the Supabase SQL editor, run `docs/db/schema.sql`.
+3) Copy environment variables into `apps/web/.env.local`:
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_NLP_URL=http://localhost:8000
+```
+
+Security note: Phase 1 uses the anon key from the browser (demo-only). Do not enable RLS until
+proper authentication or server-side access is implemented.
 
 ## Env Var Setup
 - Copy `.env.example` to `.env.local` in `apps/web` and root if needed.
@@ -53,17 +64,20 @@ pnpm dev:nlp
 
 ## Deployment
 ### Web (Vercel)
-- Build command: `pnpm --filter @dearme/web build`
-- Output: `.next`
+- Root Directory: `apps/web`
+- Install command: `pnpm install`
+- Build command: `pnpm build`
+- Env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_NLP_URL`
 
 ### NLP (Render)
 - Root directory: `services/nlp`
 - Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- Add environment variables from `.env.example`
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Runtime: `services/nlp/runtime.txt`
+- Env vars: `CORS_ORIGINS` (e.g. `https://your-vercel-domain`) and any optional overrides
 
 ## Security Notes
-- Do not log private journal text on the server.
-- Sanitize and escape all user-provided content before rendering.
+- Do not log private journal text on the server or client.
+- Render content as plain text to avoid XSS.
 - Use strict .env handling and avoid committing secrets.
-- Security headers are configured in the web app.
+- Anonymous identity is stored on this device. Clearing browser data resets it.

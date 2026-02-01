@@ -1,11 +1,11 @@
-﻿import JournalChat from "@/components/journal/journal-chat";
-import JournalSessions from "@/components/journal/journal-sessions";
+﻿import JournalForm from "@/components/journal/journal-form";
+import JournalSidebar from "@/components/journal/journal-sidebar";
 
 export default function JournalPage() {
   return (
     <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
-      <JournalSessions />
-      <JournalChat />
+      <JournalSidebar />
+      <JournalForm />
     </div>
   );
 }

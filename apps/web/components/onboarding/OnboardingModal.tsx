@@ -3,16 +3,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useProfileStore } from "@/store/use-profile-store";
+import { useSessionStore } from "@/store/use-session-store";
+import { upsertProfile } from "@/lib/db/profiles";
 
 const onboardingSchema = z.object({
-  name: z.string().min(2).max(30),
-  age: z.coerce.number().int().min(13).max(120),
-  occupation: z.string().max(60).optional(),
+  name: z.string().min(2, "Name must be at least 2 characters.").max(30),
+  age: z.coerce
+    .number({ invalid_type_error: "Age is required." })
+    .int("Age must be a whole number.")
+    .min(13, "Age must be at least 13.")
+    .max(120, "Age must be 120 or less."),
+  occupation: z.string().max(60, "Occupation must be 60 characters or less.").optional(),
 });
 
 type OnboardingForm = {
@@ -22,20 +34,22 @@ type OnboardingForm = {
 };
 
 export default function OnboardingModal() {
-  const { profile, setProfile, hasHydrated } = useProfileStore();
+  const { profile, status, setProfile, setStatus, setError, error } = useProfileStore();
+  const { ensureUserId } = useSessionStore();
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<OnboardingForm>({ name: "", age: "", occupation: "" });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (hasHydrated && !profile) {
+    if (status === "ready" && !profile) {
       setOpen(true);
     }
-  }, [hasHydrated, profile]);
+  }, [status, profile]);
 
   const title = useMemo(() => "Welcome to DearMe", []);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const parsed = onboardingSchema.safeParse({
       name: form.name.trim(),
       age: form.age,
@@ -50,17 +64,41 @@ export default function OnboardingModal() {
           nextErrors[key] = issue.message;
         }
       });
-      setErrors(nextErrors);
+      setFieldErrors(nextErrors);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    const userId = ensureUserId();
+    const payload = {
+      user_id: userId,
+      name: parsed.data.name,
+      age: parsed.data.age,
+      occupation: parsed.data.occupation ?? null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error: upsertError } = await upsertProfile(payload);
+
+    if (upsertError || !data) {
+      setError("We couldn't save your profile yet. Please try again.");
+      setSaving(false);
       return;
     }
 
     setProfile({
-      name: parsed.data.name,
-      age: parsed.data.age,
-      occupation: parsed.data.occupation,
-      createdAt: new Date().toISOString(),
+      user_id: data.user_id,
+      name: data.name,
+      age: data.age,
+      occupation: data.occupation ?? undefined,
+      createdAt: data.created_at ?? new Date().toISOString(),
     });
-    setErrors({});
+    setStatus("ready");
+    setFieldErrors({});
+    setSaving(false);
     setOpen(false);
   };
 
@@ -82,7 +120,7 @@ export default function OnboardingModal() {
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
               placeholder="Your name"
             />
-            {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
+            {fieldErrors.name && <p className="text-xs text-destructive">{fieldErrors.name}</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="age">Age</Label>
@@ -93,7 +131,7 @@ export default function OnboardingModal() {
               onChange={(event) => setForm((prev) => ({ ...prev, age: event.target.value }))}
               placeholder="18"
             />
-            {errors.age && <p className="text-xs text-destructive">{errors.age}</p>}
+            {fieldErrors.age && <p className="text-xs text-destructive">{fieldErrors.age}</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="occupation">Occupation (optional)</Label>
@@ -103,11 +141,16 @@ export default function OnboardingModal() {
               onChange={(event) => setForm((prev) => ({ ...prev, occupation: event.target.value }))}
               placeholder="Designer, student, founder..."
             />
-            {errors.occupation && <p className="text-xs text-destructive">{errors.occupation}</p>}
+            {fieldErrors.occupation && (
+              <p className="text-xs text-destructive">{fieldErrors.occupation}</p>
+            )}
           </div>
         </div>
+        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
         <div className="mt-6 flex justify-end">
-          <Button onClick={handleSubmit}>Continue</Button>
+          <Button onClick={handleSubmit} disabled={saving}>
+            {saving ? "Saving..." : "Continue"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

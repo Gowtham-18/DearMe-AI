@@ -1,58 +1,85 @@
 ﻿"use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import { Filter } from "lucide-react";
 
-import { memories, mockAnalysis } from "@/lib/mock-data";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { listEntries, type EntryRecord } from "@/lib/db/entries";
+import { formatDisplayDate } from "@/lib/date";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { useSessionStore } from "@/store/use-session-store";
 
 export default function MemoriesPage() {
-  const [selectedId, setSelectedId] = useState(memories[0]?.id ?? "");
-  const selected = memories.find((memory) => memory.id === selectedId) ?? memories[0];
+  const { ensureUserId } = useSessionStore();
+  const [entries, setEntries] = useState<EntryRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadEntries = async () => {
+      const userId = ensureUserId();
+      const { data, error: loadError } = await listEntries(userId, 50);
+
+      if (loadError) {
+        setError("We couldn't load your entries yet.");
+        setLoading(false);
+        return;
+      }
+
+      setEntries(data);
+      setLoading(false);
+    };
+
+    loadEntries();
+  }, [ensureUserId]);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
-      <section className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Input placeholder="Search entries..." />
-          <Button variant="outline" size="icon" aria-label="Filter">
-            <Filter className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="space-y-3">
-          {memories.map((memory) => (
-            <button
-              key={memory.id}
-              type="button"
-              onClick={() => setSelectedId(memory.id)}
-              className={cn(
-                "w-full rounded-2xl border bg-card p-4 text-left shadow-sm transition hover:border-foreground/20",
-                memory.id === selectedId && "border-foreground/20"
-              )}
-            >
-              <p className="text-sm font-semibold">{memory.title}</p>
-              <p className="text-xs text-muted-foreground">{memory.date}</p>
-              <p className="mt-2 text-xs text-muted-foreground">Mood: {memory.mood}</p>
-            </button>
-          ))}
-        </div>
+    <div className="space-y-6">
+      <section className="flex items-center gap-2">
+        <Input placeholder="Search entries..." />
+        <Button variant="outline" size="icon" aria-label="Filter">
+          <Filter className="h-4 w-4" />
+        </Button>
       </section>
-      <Card className="h-full">
-        <CardHeader>
-          <CardTitle className="text-lg">{selected?.title}</CardTitle>
-          <p className="text-sm text-muted-foreground">{selected?.date}</p>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm text-muted-foreground">
-          <p>{selected?.content}</p>
-          <div className="rounded-2xl bg-muted p-4 text-xs text-muted-foreground">
-            NLP summary placeholder: sentiment {mockAnalysis.sentiment}, themes{" "}
-            {mockAnalysis.themes.join(", ")}.
-          </div>
-        </CardContent>
-      </Card>
+
+      {error && <Card className="p-4 text-sm text-destructive">{error}</Card>}
+
+      <section className="space-y-3">
+        {loading && <Card className="p-4 text-sm text-muted-foreground">Loading entries...</Card>}
+        {!loading && entries.length === 0 && (
+          <Card className="p-4 text-sm text-muted-foreground">No entries yet.</Card>
+        )}
+        {entries.map((entry, index) => {
+          const showDateHeading =
+            index === 0 || entries[index - 1]?.entry_date !== entry.entry_date;
+          return (
+            <div key={entry.id} className="space-y-2">
+              {showDateHeading && (
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  {formatDisplayDate(entry.entry_date)}
+                </p>
+              )}
+              <Link href={`/memories/${entry.id}`}>
+                <Card className="p-4 shadow-sm transition hover:border-foreground/20">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold">{entry.mood ?? "No mood"}</p>
+                      <p className="text-xs text-muted-foreground">{entry.time_budget} min</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">View</p>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {entry.content.slice(0, 140)}
+                    {entry.content.length > 140 ? "..." : ""}
+                  </p>
+                </Card>
+              </Link>
+            </div>
+          );
+        })}
+      </section>
     </div>
   );
 }

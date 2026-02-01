@@ -2,33 +2,38 @@
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export interface Profile {
+  user_id: string;
   name: string;
   age: number;
-  occupation?: string;
+  occupation?: string | null;
   createdAt: string;
 }
 
+type ProfileStatus = "idle" | "loading" | "ready" | "error";
+
 interface ProfileState {
   profile: Profile | null;
-  hasHydrated: boolean;
-  setProfile: (profile: Profile) => void;
-  setHasHydrated: (value: boolean) => void;
+  status: ProfileStatus;
+  error: string | null;
+  setProfile: (profile: Profile | null) => void;
+  setStatus: (status: ProfileStatus) => void;
+  setError: (error: string | null) => void;
 }
 
 export const useProfileStore = create<ProfileState>()(
   persist(
     (set) => ({
       profile: null,
-      hasHydrated: false,
+      status: "idle",
+      error: null,
       setProfile: (profile) => set({ profile }),
-      setHasHydrated: (value) => set({ hasHydrated: value }),
+      setStatus: (status) => set({ status }),
+      setError: (error) => set({ error }),
     }),
     {
       name: "dearme-profile",
       storage: createJSONStorage(() => localStorage),
-      onRehydrateStorage: () => (state) => {
-        state?.setHasHydrated(true);
-      },
+      partialize: (state) => ({ profile: state.profile }),
     }
   )
 );

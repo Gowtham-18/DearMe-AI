@@ -1,27 +1,28 @@
 ﻿import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { getOrCreateAnonymousUserId } from "@/lib/db/profiles";
+
 interface SessionState {
   userId: string | null;
-  ensureUserId: () => void;
+  ensureUserId: () => string;
+  clearUserId: () => void;
 }
-
-const createUserId = () => {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `anon_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-};
 
 export const useSessionStore = create<SessionState>()(
   persist(
     (set, get) => ({
       userId: null,
       ensureUserId: () => {
-        if (!get().userId) {
-          set({ userId: createUserId() });
+        const current = get().userId;
+        if (current) {
+          return current;
         }
+        const next = getOrCreateAnonymousUserId();
+        set({ userId: next });
+        return next;
       },
+      clearUserId: () => set({ userId: null }),
     }),
     {
       name: "dearme-session",

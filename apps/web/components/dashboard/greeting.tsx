@@ -12,7 +12,7 @@ const greetingForHour = (hour: number) => {
 
 export default function Greeting() {
   const { profile } = useProfileStore();
-  const name = profile?.name ?? "Alex";
+  const name = profile?.name ?? "there";
 
   const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
 

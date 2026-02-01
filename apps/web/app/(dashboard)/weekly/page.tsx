@@ -1,4 +1,4 @@
-﻿import { weeklyEvidence } from "@/lib/mock-data";
+﻿import { weeklyEvidence } from "@/lib/weekly";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function WeeklyPage() {

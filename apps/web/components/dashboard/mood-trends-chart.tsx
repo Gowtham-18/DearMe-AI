@@ -13,12 +13,18 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { moodTrend7, moodTrend30 } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
-export default function MoodTrendsChart() {
+export type MoodPoint = { day: string; value: number };
+
+interface MoodTrendsChartProps {
+  data7: MoodPoint[];
+  data30: MoodPoint[];
+}
+
+export default function MoodTrendsChart({ data7, data30 }: MoodTrendsChartProps) {
   const [range, setRange] = useState<"7d" | "30d">("7d");
-  const data = range === "7d" ? moodTrend7 : moodTrend30;
+  const data = range === "7d" ? data7 : data30;
 
   return (
     <Card className="shadow-sm">
@@ -44,34 +50,40 @@ export default function MoodTrendsChart() {
         </div>
       </CardHeader>
       <CardContent className="h-[280px]">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ left: 8, right: 8, top: 10 }}>
-            <defs>
-              <linearGradient id="moodLine" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="hsl(var(--chart-1))" />
-                <stop offset="100%" stopColor="hsl(var(--chart-2))" />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} strokeDasharray="3 3" />
-            <XAxis dataKey="day" tickLine={false} axisLine={false} />
-            <YAxis hide />
-            <Tooltip
-              contentStyle={{
-                background: "hsl(var(--card))",
-                borderRadius: "12px",
-                border: "1px solid hsl(var(--border))",
-              }}
-            />
-            <Line
-              type="monotone"
-              dataKey="value"
-              stroke="url(#moodLine)"
-              strokeWidth={3}
-              dot={false}
-              activeDot={{ r: 6 }}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+        {data.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            No mood data yet. Add a mood to your journal to see trends.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ left: 8, right: 8, top: 10 }}>
+              <defs>
+                <linearGradient id="moodLine" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="hsl(var(--chart-1))" />
+                  <stop offset="100%" stopColor="hsl(var(--chart-2))" />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <XAxis dataKey="day" tickLine={false} axisLine={false} />
+              <YAxis hide />
+              <Tooltip
+                contentStyle={{
+                  background: "hsl(var(--card))",
+                  borderRadius: "12px",
+                  border: "1px solid hsl(var(--border))",
+                }}
+              />
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke="url(#moodLine)"
+                strokeWidth={3}
+                dot={false}
+                activeDot={{ r: 6 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </CardContent>
     </Card>
   );
