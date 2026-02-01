@@ -8,3 +8,4 @@ services/nlp/.venv
 __pycache__
 *.pyc
 dist
+.venv/
