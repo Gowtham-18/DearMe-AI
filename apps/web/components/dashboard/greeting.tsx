@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 
 import { useProfileStore } from "@/store/use-profile-store";
 
@@ -13,8 +13,11 @@ const greetingForHour = (hour: number) => {
 export default function Greeting() {
   const { profile } = useProfileStore();
   const name = profile?.name ?? "there";
+  const [greeting, setGreeting] = useState("Hello");
 
-  const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
+  useEffect(() => {
+    setGreeting(greetingForHour(new Date().getHours()));
+  }, []);
 
   return (
     <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">

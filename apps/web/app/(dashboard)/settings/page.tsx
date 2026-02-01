@@ -15,6 +15,10 @@ import { useSessionStore } from "@/store/use-session-store";
 import { useProfileStore } from "@/store/use-profile-store";
 import { deleteAllEntries, listEntries } from "@/lib/db/entries";
 import { deleteProfile, getProfile } from "@/lib/db/profiles";
+import { listEntryAnalysis } from "@/lib/db/analysis";
+import { listThemes, listThemeMembership } from "@/lib/db/themes";
+import { listWeeklyReflections } from "@/lib/db/weekly";
+import { deleteUserInsights } from "@/lib/db/cleanup";
 
 export default function SettingsPage() {
   const { ensureUserId } = useSessionStore();
@@ -33,10 +37,21 @@ export default function SettingsPage() {
       const userId = ensureUserId();
       const { data: profileData } = await getProfile(userId);
       const { data: entries } = await listEntries(userId, 500);
+      const { data: analyses } = await listEntryAnalysis(userId, 500);
+      const { data: themes } = await listThemes(userId, 20);
+      const { data: memberships } = await listThemeMembership(
+        userId,
+        themes?.map((theme) => theme.id) ?? []
+      );
+      const { data: weekly } = await listWeeklyReflections(userId, 12);
 
       const payload = {
         profile: profileData,
         entries,
+        analyses: analyses ?? [],
+        themes: themes ?? [],
+        theme_membership: memberships ?? [],
+        weekly_reflections: weekly ?? [],
         exported_at: new Date().toISOString(),
       };
 
@@ -60,6 +75,13 @@ export default function SettingsPage() {
     setDeleting(true);
     setStatus(null);
     const userId = ensureUserId();
+
+    const insightsResult = await deleteUserInsights(userId);
+    if (insightsResult.error) {
+      setStatus({ message: "We couldn't delete your insights yet. Please try again.", tone: "error" });
+      setDeleting(false);
+      return;
+    }
 
     const entriesResult = await deleteAllEntries(userId);
     if (entriesResult.error) {

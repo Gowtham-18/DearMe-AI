@@ -47,6 +47,10 @@ export default function JournalForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reward, setReward] = useState<string | null>(null);
+  const [analysisNotice, setAnalysisNotice] = useState<string | null>(null);
+  const [prompts, setPrompts] = useState<string[]>(journalPrompts);
+  const [promptsLoading, setPromptsLoading] = useState(true);
+  const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -72,10 +76,61 @@ export default function JournalForm() {
     loadEntry();
   }, [ensureUserId, todayKey]);
 
+  useEffect(() => {
+    const loadPrompts = async () => {
+      const userId = ensureUserId();
+      try {
+        const response = await fetch("/api/prompts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId }),
+        });
+        if (response.ok) {
+          const data = (await response.json()) as {
+            prompts?: string[];
+            safety?: { crisis?: boolean; reason?: string | null };
+          };
+          if (data.safety?.crisis) {
+            setSafetyNotice(
+              "If you're feeling overwhelmed, consider reaching out to someone you trust."
+            );
+            setPrompts([]);
+          } else if (data.prompts && data.prompts.length > 0) {
+            setPrompts(data.prompts);
+          }
+        }
+      } catch {
+        // fall back to default prompts
+      } finally {
+        setPromptsLoading(false);
+      }
+    };
+
+    loadPrompts();
+  }, [ensureUserId]);
+
+  const triggerAnalysis = async (entryId: string) => {
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryId }),
+      });
+      if (!response.ok) {
+        setAnalysisNotice("Insights will update shortly.");
+      } else {
+        setAnalysisNotice(null);
+      }
+    } catch {
+      setAnalysisNotice("Insights will update shortly.");
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     setReward(null);
+    setAnalysisNotice(null);
 
     if (!content.trim()) {
       setError("Please write a few thoughts before saving.");
@@ -98,6 +153,7 @@ export default function JournalForm() {
       }
 
       setEntry(data);
+      void triggerAnalysis(data.id);
     } else {
       const { data, error: createError } = await createEntry({
         user_id: userId,
@@ -125,6 +181,7 @@ export default function JournalForm() {
       }
 
       setEntry(data);
+      void triggerAnalysis(data.id);
     }
 
     const { data: entries } = await listEntries(userId, 365);
@@ -187,11 +244,17 @@ export default function JournalForm() {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               Gentle prompts
             </p>
-            <ul className="mt-2 list-disc space-y-1 pl-4">
-              {journalPrompts.map((prompt) => (
-                <li key={prompt}>{prompt}</li>
-              ))}
-            </ul>
+            {safetyNotice ? (
+              <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
+            ) : promptsLoading ? (
+              <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
+            ) : (
+              <ul className="mt-2 list-disc space-y-1 pl-4">
+                {prompts.map((prompt) => (
+                  <li key={prompt}>{prompt}</li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="rounded-2xl border bg-background p-3">
@@ -205,6 +268,7 @@ export default function JournalForm() {
 
           {error && <p className="text-sm text-destructive">{error}</p>}
           {reward && <p className="text-sm text-emerald-600">{reward}</p>}
+          {analysisNotice && <p className="text-sm text-muted-foreground">{analysisNotice}</p>}
 
           <div className="flex justify-end">
             <Button onClick={handleSave} disabled={saving} className="gap-2">
