@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { Bell, Search, ShieldCheck } from "lucide-react";
+import { Bell, Search, ShieldCheck, Sparkles } from "lucide-react";
 
 import ThemeToggle from "@/components/theme-toggle";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -11,6 +11,7 @@ import { useProfileStore } from "@/store/use-profile-store";
 
 export default function TopHeader() {
   const { profile } = useProfileStore();
+  const enhancedEnabled = profile?.preferences?.enhanced_language_enabled;
   const initials = profile?.name
     ? profile.name
         .split(" ")
@@ -27,6 +28,12 @@ export default function TopHeader() {
         <Input className="pl-9" placeholder="Search memories..." />
       </div>
       <div className="flex items-center gap-3">
+        {enhancedEnabled && (
+          <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">
+            <Sparkles className="h-3.5 w-3.5" />
+            Enhanced
+          </Badge>
+        )}
         <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">
           <ShieldCheck className="h-3.5 w-3.5" />
           Privacy Locked

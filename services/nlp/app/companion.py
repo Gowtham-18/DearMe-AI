@@ -4,7 +4,16 @@ import hashlib
 import random
 from typing import List, Optional, Sequence
 
-from .models import AssistantEvidence, AssistantTurn, ContextEntry, PromptEvidence, PromptItem, ReflectionPayload
+from .models import (
+    ContextEntry,
+    EvidenceCard,
+    PatternConnection,
+    PlanSection,
+    PromptEvidence,
+    PromptItem,
+    ReflectionPlan,
+    RenderedMessage,
+)
 from .pipeline import extract_keyphrases, get_emotion
 
 
@@ -97,55 +106,90 @@ def build_prompts(
     return prompts[:4]
 
 
-def build_chat_turn(
+def build_reflection_plan(
     user_id: str,
     selected_prompt: str,
     latest_user_message: str,
     retrieved_entries: List[ContextEntry],
     time_budget: int,
     mood: Optional[str],
-) -> AssistantTurn:
+    safety: dict,
+) -> ReflectionPlan:
+    if safety.get("crisis"):
+        return ReflectionPlan(
+            validation=PlanSection(
+                text="I'm really sorry you're feeling this way. You deserve support."
+            ),
+            reflection=PlanSection(
+                text="If you're in immediate danger, please contact your local emergency number."
+            ),
+            pattern_connection=PatternConnection(
+                text="Reaching out to someone you trust can be a helpful next step.", references=[]
+            ),
+            gentle_nudge=PlanSection(text="You don't have to carry this alone."),
+            follow_up_question=PlanSection(text="Are you safe right now?"),
+            evidence_cards=[],
+            safety=safety,
+        )
+
     emotion = get_emotion(latest_user_message)
     emotion_phrase = _emotion_phrase(emotion)
     keyphrases = extract_keyphrases(latest_user_message, top_n=3)
-    topic = keyphrases[0] if keyphrases else "what matters most"
+    fallback_topic = selected_prompt.replace("?", "").strip() if selected_prompt else ""
+    topic = keyphrases[0] if keyphrases else (fallback_topic or "what feels most important")
+    mood_hint = f"while feeling {mood.lower()}" if mood else "right now"
 
-    base = f"That sounds {emotion_phrase}. Thank you for sharing."
-    reflection = f"It seems {topic} is really present for you right now."
-    if retrieved_entries:
-        reflection += " You mentioned something similar before."
-
-    if time_budget <= 5:
-        message = f"{base} {reflection}"
-    else:
-        message = (
-            f"{base} {reflection} "
-            f"Even small details you notice can help you stay connected to {topic}."
-        )
-
-    follow_up = f"What feels most important to explore about {topic} next?"
-    if mood:
-        follow_up = f"How does this connect to feeling {mood.lower()} lately?"
-
-    evidence = [
-        AssistantEvidence(
-            source="past_entry",
+    evidence_entries = _pick_entries(retrieved_entries, 2)
+    evidence_cards = [
+        EvidenceCard(
             entry_id=entry.entry_id,
             snippet=_snippet(entry.text),
-            reason="Similar theme appeared in a previous entry.",
+            reason="Related to a past entry.",
         )
-        for entry in _pick_entries(retrieved_entries, 2)
+        for entry in evidence_entries
     ]
+    reference_ids = [card.entry_id for card in evidence_cards if card.entry_id]
 
-    reflection_payload = ReflectionPayload(
-        emotion=emotion,
-        themes=keyphrases[:3],
-        supportive_nudge="You’re doing the work by showing up with honesty.",
+    if time_budget <= 5:
+        validation_text = f"Thanks for sharing. That sounds {emotion_phrase}."
+        reflection_text = f"It seems {topic} is really present for you {mood_hint}."
+        pattern_text = (
+            f"You have mentioned {topic} before."
+            if evidence_cards
+            else "It can help to notice what keeps returning."
+        )
+        nudge_text = f"If it helps, name one small detail about {topic}."
+        question_text = "What feels most important to explore next?"
+    else:
+        validation_text = f"Thanks for sharing. That sounds {emotion_phrase}."
+        reflection_text = (
+            f"It seems {topic} is really present for you {mood_hint}. "
+            "Small details can reveal what you need most."
+        )
+        pattern_text = (
+            f"You have touched on {topic} before."
+            if evidence_cards
+            else "If a pattern is forming, it's okay to name it gently."
+        )
+        nudge_text = f"If it helps, notice what supported you around {topic}, even a little."
+        question_text = f"What feels most important to explore about {topic} next?"
+
+    return ReflectionPlan(
+        validation=PlanSection(text=validation_text),
+        reflection=PlanSection(text=reflection_text),
+        pattern_connection=PatternConnection(text=pattern_text, references=reference_ids),
+        gentle_nudge=PlanSection(text=nudge_text),
+        follow_up_question=PlanSection(text=question_text),
+        evidence_cards=evidence_cards,
+        safety=safety,
     )
 
-    return AssistantTurn(
-        message=message,
-        follow_up_question=follow_up,
-        reflection=reflection_payload,
-        evidence=evidence,
+
+def render_plan_to_message(plan: ReflectionPlan) -> RenderedMessage:
+    return RenderedMessage(
+        validation=plan.validation.text,
+        reflection=plan.reflection.text,
+        pattern_connection=plan.pattern_connection.text,
+        gentle_nudge=plan.gentle_nudge.text,
+        follow_up_question=plan.follow_up_question.text,
     )

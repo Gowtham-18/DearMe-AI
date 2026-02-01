@@ -57,12 +57,17 @@ pnpm dev
 2) In the Supabase SQL editor, run `docs/db/schema.sql`.
 3) Then run `docs/db/schema-phase2.sql` to enable analysis + pgvector tables.
 4) Then run `docs/db/schema-phase3.sql` to enable journaling chat sessions.
+5) Then run `docs/db/schema-phase4.sql` to store profile preferences.
 5) Copy environment variables into `apps/web/.env.local`:
 ```
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 NEXT_PUBLIC_NLP_URL=http://localhost:8000
 NLP_SERVICE_URL=http://localhost:8000
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_MAX_TOKENS=240
+OPENAI_TEMPERATURE=0.2
 ```
 
 Security note: Phase 1 uses the anon key from the browser (demo-only). Do not enable RLS until
@@ -72,6 +77,7 @@ proper authentication or server-side access is implemented.
 - Copy `.env.example` to `.env.local` in `apps/web` and root if needed.
 - Copy `services/nlp/.env.example` to `services/nlp/.env` for local overrides.
 - Optional NLP overrides: `EMBEDDING_MODEL_NAME`, `SENTIMENT_MODEL_NAME`, `LOG_LEVEL`.
+- Optional web overrides: `OPENAI_MODEL`, `OPENAI_MAX_TOKENS`, `OPENAI_TEMPERATURE`.
 - Never commit real secrets or user data.
 
 ## Deployment
@@ -80,6 +86,7 @@ proper authentication or server-side access is implemented.
 - Install command: `pnpm install`
 - Build command: `pnpm build`
 - Env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_NLP_URL`, `NLP_SERVICE_URL`
+- If Enhanced Language Mode is enabled, add `OPENAI_API_KEY` and (optionally) `OPENAI_MODEL`
 
 ### NLP (Render)
 - Root directory: `services/nlp`
@@ -94,3 +101,4 @@ proper authentication or server-side access is implemented.
 - Use strict .env handling and avoid committing secrets.
 - Anonymous identity is stored on this device. Clearing browser data resets it.
 - Phase 2 still runs without auth; plan to add Supabase Auth + RLS + server-side write proxy next.
+- Enhanced Language Mode (if enabled) uses a server-only OpenAI key to rewrite wording only.

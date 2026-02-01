@@ -80,6 +80,7 @@ export default function OnboardingModal() {
       name: parsed.data.name,
       age: parsed.data.age,
       occupation: parsed.data.occupation ?? null,
+      preferences: { enhanced_language_enabled: false, enhanced_consent: false },
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -97,6 +98,7 @@ export default function OnboardingModal() {
       name: data.name,
       age: data.age,
       occupation: data.occupation ?? undefined,
+      preferences: data.preferences ?? { enhanced_language_enabled: false, enhanced_consent: false },
       createdAt: data.created_at ?? new Date().toISOString(),
     });
     setStatus("ready");

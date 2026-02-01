@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { moodOptions, timeBudgets } from "@/lib/prompts";
 import { formatLocalDate } from "@/lib/date";
 import { useSessionStore } from "@/store/use-session-store";
+import { useProfileStore } from "@/store/use-profile-store";
 import {
   createTurn,
   listTurns,
@@ -25,6 +26,7 @@ interface SessionPageProps {
 export default function JournalSessionPage({ params }: SessionPageProps) {
   const router = useRouter();
   const { ensureUserId } = useSessionStore();
+  const { profile } = useProfileStore();
   const [turns, setTurns] = useState<JournalTurnRecord[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -35,6 +37,7 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
   const [timeBudget, setTimeBudget] = useState<number>(5);
   const [finishing, setFinishing] = useState(false);
   const [finishMessage, setFinishMessage] = useState<string | null>(null);
+  const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -86,11 +89,10 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
         body: JSON.stringify({
           userId,
           sessionId: params.session_id,
-          selectedPrompt: turns[0]?.content ?? "",
-          history: nextTurns.map((turn) => ({ role: turn.role, content: turn.content })),
           latestUserMessage: message,
           timeBudget,
           mood,
+          enhancedLanguageEnabled: enhancedEnabled,
         }),
       });
 
@@ -101,8 +103,9 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
       }
 
       const data = (await response.json()) as {
-        assistant: { message: string; follow_up_question?: string | null };
-        safety: { crisis?: boolean; reason?: string | null };
+        assistant?: { message?: string };
+        assistant_turn?: JournalTurnRecord | null;
+        safety?: { crisis?: boolean; reason?: string | null };
       };
 
       if (data.safety?.crisis) {
@@ -111,19 +114,18 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
         );
       }
 
-      const assistantMessage = data.assistant.follow_up_question
-        ? `${data.assistant.message} ${data.assistant.follow_up_question}`
-        : data.assistant.message;
-
-      const { data: assistantTurn } = await createTurn({
-        session_id: params.session_id,
-        user_id: userId,
-        role: "assistant",
-        content: assistantMessage,
-      });
-
-      if (assistantTurn) {
-        setTurns((prev) => [...prev, assistantTurn]);
+      if (data.assistant_turn) {
+        setTurns((prev) => [...prev, data.assistant_turn as JournalTurnRecord]);
+      } else if (data.assistant?.message) {
+        const { data: assistantTurn } = await createTurn({
+          session_id: params.session_id,
+          user_id: userId,
+          role: "assistant",
+          content: data.assistant.message,
+        });
+        if (assistantTurn) {
+          setTurns((prev) => [...prev, assistantTurn]);
+        }
       }
     } catch {
       setError("We couldn't generate a response yet.");
@@ -196,7 +198,10 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
             <h2 className="text-lg font-semibold">Journal Session</h2>
             <p className="text-xs text-muted-foreground">Private session</p>
           </div>
-          <Badge variant="secondary">Active</Badge>
+          <div className="flex items-center gap-2">
+            {enhancedEnabled && <Badge variant="secondary">Enhanced</Badge>}
+            <Badge variant="secondary">Active</Badge>
+          </div>
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto rounded-2xl border bg-background p-4">

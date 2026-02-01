@@ -6,8 +6,14 @@ export interface ProfileRecord {
   name: string;
   age: number;
   occupation: string | null;
+  preferences?: ProfilePreferences | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface ProfilePreferences {
+  enhanced_language_enabled?: boolean;
+  enhanced_consent?: boolean;
 }
 
 const USER_ID_KEY = "dearme-user-id";
@@ -67,6 +73,31 @@ export async function upsertProfile(profile: ProfileRecord): Promise<DbResult<Pr
     return { data: data ?? null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save profile.";
+    return { data: null, error: message };
+  }
+}
+
+export async function updateProfilePreferences(
+  userId: string,
+  preferences: ProfilePreferences
+): Promise<DbResult<ProfileRecord>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ preferences, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      return { data: null, error: error.message };
+    }
+
+    return { data: data ?? null, error: null };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to update your preferences.";
     return { data: null, error: message };
   }
 }

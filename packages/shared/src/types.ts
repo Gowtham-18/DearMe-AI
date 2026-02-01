@@ -110,23 +110,47 @@ export interface ChatTurnRequest {
   latest_user_message: string;
   time_budget: number;
   mood?: string | null;
+  retrieved_entries?: Array<{
+    entry_id: string;
+    text: string;
+    created_at?: string;
+    mood?: string | null;
+    source?: string;
+  }>;
+}
+
+export interface EvidenceCard {
+  entry_id?: string | null;
+  snippet: string;
+  reason: string;
+}
+
+export interface ReflectionPlan {
+  validation: { text: string };
+  reflection: { text: string };
+  pattern_connection: { text: string; references: string[] };
+  gentle_nudge: { text: string };
+  follow_up_question: { text: string };
+  evidence_cards: EvidenceCard[];
+  safety: SafetyResult;
+  constraints: {
+    no_medical_claims: boolean;
+    no_diagnosis: boolean;
+    journaling_only: boolean;
+    no_advice: boolean;
+  };
+}
+
+export interface AssistantMessage {
+  validation: string;
+  reflection: string;
+  pattern_connection: string;
+  gentle_nudge: string;
+  follow_up_question: string;
 }
 
 export interface ChatTurnResponse {
-  assistant: {
-    message: string;
-    follow_up_question?: string | null;
-    reflection: {
-      emotion: string;
-      themes: string[];
-      supportive_nudge: string;
-    };
-    evidence: Array<{
-      source: "current_message" | "past_entry";
-      entry_id?: string | null;
-      snippet: string;
-      reason: string;
-    }>;
-  };
+  plan: ReflectionPlan;
+  assistant_message: AssistantMessage;
   safety: SafetyResult;
 }

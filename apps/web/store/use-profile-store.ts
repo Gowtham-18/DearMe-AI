@@ -6,6 +6,10 @@ export interface Profile {
   name: string;
   age: number;
   occupation?: string | null;
+  preferences?: {
+    enhanced_language_enabled?: boolean;
+    enhanced_consent?: boolean;
+  } | null;
   createdAt: string;
 }
 
@@ -16,6 +20,7 @@ interface ProfileState {
   status: ProfileStatus;
   error: string | null;
   setProfile: (profile: Profile | null) => void;
+  setPreferences: (preferences: Profile["preferences"]) => void;
   setStatus: (status: ProfileStatus) => void;
   setError: (error: string | null) => void;
 }
@@ -27,6 +32,10 @@ export const useProfileStore = create<ProfileState>()(
       status: "idle",
       error: null,
       setProfile: (profile) => set({ profile }),
+      setPreferences: (preferences) =>
+        set((state) => ({
+          profile: state.profile ? { ...state.profile, preferences } : state.profile,
+        })),
       setStatus: (status) => set({ status }),
       setError: (error) => set({ error }),
     }),

@@ -144,27 +144,48 @@ class ChatTurnRequest(BaseModel):
     mood: Optional[str] = None
     retrieved_entries: List[ContextEntry] = []
 
-
-class ReflectionPayload(BaseModel):
-    emotion: str
-    themes: List[str]
-    supportive_nudge: str
+class PlanSection(BaseModel):
+    text: str
 
 
-class AssistantEvidence(BaseModel):
-    source: str
+class PatternConnection(BaseModel):
+    text: str
+    references: List[str] = Field(default_factory=list)
+
+
+class PlanConstraints(BaseModel):
+    no_medical_claims: bool = True
+    no_diagnosis: bool = True
+    journaling_only: bool = True
+    no_advice: bool = True
+
+
+class EvidenceCard(BaseModel):
     entry_id: Optional[str] = None
     snippet: str
     reason: str
 
 
-class AssistantTurn(BaseModel):
-    message: str
-    follow_up_question: Optional[str] = None
-    reflection: ReflectionPayload
-    evidence: List[AssistantEvidence] = []
+class ReflectionPlan(BaseModel):
+    validation: PlanSection
+    reflection: PlanSection
+    pattern_connection: PatternConnection
+    gentle_nudge: PlanSection
+    follow_up_question: PlanSection
+    evidence_cards: List[EvidenceCard] = Field(default_factory=list)
+    safety: SafetyResult
+    constraints: PlanConstraints = Field(default_factory=PlanConstraints)
+
+
+class RenderedMessage(BaseModel):
+    validation: str
+    reflection: str
+    pattern_connection: str
+    gentle_nudge: str
+    follow_up_question: str
 
 
 class ChatTurnResponse(BaseModel):
-    assistant: AssistantTurn
+    plan: ReflectionPlan
+    assistant_message: RenderedMessage
     safety: SafetyResult

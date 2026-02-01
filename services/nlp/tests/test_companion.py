@@ -1,4 +1,4 @@
-from app.companion import build_chat_turn, build_prompts
+from app.companion import build_prompts, build_reflection_plan, render_plan_to_message
 from app.models import ContextEntry
 
 
@@ -15,13 +15,45 @@ def test_build_prompts_returns_items() -> None:
     assert prompts[0].text
 
 
-def test_build_chat_turn_has_follow_up() -> None:
-    assistant = build_chat_turn(
+def test_build_reflection_plan_has_sections() -> None:
+    plan = build_reflection_plan(
         user_id="user-1",
         selected_prompt="What felt steady today?",
         latest_user_message="I felt overwhelmed but relieved after talking to a friend.",
         retrieved_entries=[],
         time_budget=5,
         mood="Stressed",
+        safety={"crisis": False, "reason": None},
     )
-    assert assistant.follow_up_question
+    assert plan.validation.text
+    assert plan.follow_up_question.text
+    assert plan.constraints.no_medical_claims
+
+
+def test_render_plan_to_message_returns_text() -> None:
+    plan = build_reflection_plan(
+        user_id="user-1",
+        selected_prompt="What felt steady today?",
+        latest_user_message="I felt overwhelmed but relieved after talking to a friend.",
+        retrieved_entries=[],
+        time_budget=5,
+        mood="Stressed",
+        safety={"crisis": False, "reason": None},
+    )
+    rendered = render_plan_to_message(plan)
+    assert rendered.validation
+    assert rendered.follow_up_question
+
+
+def test_build_reflection_plan_crisis() -> None:
+    plan = build_reflection_plan(
+        user_id="user-1",
+        selected_prompt="",
+        latest_user_message="I can't go on.",
+        retrieved_entries=[],
+        time_budget=5,
+        mood=None,
+        safety={"crisis": True, "reason": "Detected crisis-related language."},
+    )
+    assert plan.safety.crisis
+    assert "emergency" in plan.reflection.text.lower()

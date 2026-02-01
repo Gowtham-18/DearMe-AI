@@ -28,6 +28,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           name: profile.name,
           age: profile.age,
           occupation: profile.occupation ?? null,
+          preferences: profile.preferences ?? {},
           created_at: profile.createdAt,
           updated_at: new Date().toISOString(),
         });
@@ -53,6 +54,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           name: data.name,
           age: data.age,
           occupation: data.occupation ?? undefined,
+          preferences: data.preferences ?? {},
           createdAt: data.created_at ?? new Date().toISOString(),
         });
       }

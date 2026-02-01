@@ -155,25 +155,50 @@ export const chatTurnRequestSchema = z.object({
   latest_user_message: z.string().min(1),
   time_budget: z.number(),
   mood: z.string().nullable().optional(),
+  retrieved_entries: z
+    .array(
+      z.object({
+        entry_id: z.string().min(1),
+        text: z.string().min(1),
+        created_at: z.string().optional(),
+        mood: z.string().nullable().optional(),
+        source: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export const chatTurnResponseSchema = z.object({
-  assistant: z.object({
-    message: z.string(),
-    follow_up_question: z.string().nullable().optional(),
-    reflection: z.object({
-      emotion: z.string(),
-      themes: z.array(z.string()),
-      supportive_nudge: z.string(),
+  plan: z.object({
+    validation: z.object({ text: z.string() }),
+    reflection: z.object({ text: z.string() }),
+    pattern_connection: z.object({
+      text: z.string(),
+      references: z.array(z.string()),
     }),
-    evidence: z.array(
+    gentle_nudge: z.object({ text: z.string() }),
+    follow_up_question: z.object({ text: z.string() }),
+    evidence_cards: z.array(
       z.object({
-        source: z.enum(["current_message", "past_entry"]),
         entry_id: z.string().nullable().optional(),
         snippet: z.string(),
         reason: z.string(),
       })
     ),
+    safety: safetyResultSchema,
+    constraints: z.object({
+      no_medical_claims: z.boolean(),
+      no_diagnosis: z.boolean(),
+      journaling_only: z.boolean(),
+      no_advice: z.boolean(),
+    }),
+  }),
+  assistant_message: z.object({
+    validation: z.string(),
+    reflection: z.string(),
+    pattern_connection: z.string(),
+    gentle_nudge: z.string(),
+    follow_up_question: z.string(),
   }),
   safety: safetyResultSchema,
 });

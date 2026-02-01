@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,22 +14,90 @@ import {
 import { useSessionStore } from "@/store/use-session-store";
 import { useProfileStore } from "@/store/use-profile-store";
 import { deleteAllEntries, listEntries } from "@/lib/db/entries";
-import { deleteProfile, getProfile } from "@/lib/db/profiles";
+import { deleteProfile, getProfile, updateProfilePreferences } from "@/lib/db/profiles";
 import { listEntryAnalysis } from "@/lib/db/analysis";
 import { listThemes, listThemeMembership } from "@/lib/db/themes";
 import { listWeeklyReflections } from "@/lib/db/weekly";
 import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
 import { deleteUserInsights } from "@/lib/db/cleanup";
+import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
   const { ensureUserId } = useSessionStore();
-  const { setProfile } = useProfileStore();
+  const { profile, setProfile, setPreferences } = useProfileStore();
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [updatingEnhanced, setUpdatingEnhanced] = useState(false);
   const [status, setStatus] = useState<{ message: string; tone: "success" | "error" } | null>(
     null
   );
+  const [prefStatus, setPrefStatus] = useState<{ message: string; tone: "success" | "error" } | null>(
+    null
+  );
+
+  const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
+  const enhancedConsent = profile?.preferences?.enhanced_consent ?? false;
+  const canToggleEnhanced = Boolean(profile);
+  const enhancedSummary = useMemo(
+    () =>
+      enhancedEnabled
+        ? "Enhanced language is on."
+        : "Enhanced language uses a model to rephrase responses only.",
+    [enhancedEnabled]
+  );
+
+  const persistPreferences = async (nextPreferences: {
+    enhanced_language_enabled: boolean;
+    enhanced_consent: boolean;
+  }) => {
+    setPreferences(nextPreferences);
+    if (!profile) return;
+
+    const { data, error } = await updateProfilePreferences(profile.user_id, nextPreferences);
+    if (error) {
+      setPrefStatus({
+        message: "We couldn't sync your preferences yet. We'll retry next time.",
+        tone: "error",
+      });
+      return;
+    }
+    if (data) {
+      setProfile({
+        user_id: data.user_id,
+        name: data.name,
+        age: data.age,
+        occupation: data.occupation ?? undefined,
+        preferences: data.preferences ?? nextPreferences,
+        createdAt: data.created_at ?? new Date().toISOString(),
+      });
+    }
+  };
+
+  const handleEnhancedToggle = async () => {
+    if (updatingEnhanced || !canToggleEnhanced) return;
+    setPrefStatus(null);
+
+    if (!enhancedEnabled && !enhancedConsent) {
+      setConsentOpen(true);
+      return;
+    }
+
+    setUpdatingEnhanced(true);
+    await persistPreferences({
+      enhanced_language_enabled: !enhancedEnabled,
+      enhanced_consent: enhancedConsent,
+    });
+    setUpdatingEnhanced(false);
+  };
+
+  const handleConsentConfirm = async () => {
+    setConsentOpen(false);
+    setUpdatingEnhanced(true);
+    await persistPreferences({ enhanced_language_enabled: true, enhanced_consent: true });
+    setUpdatingEnhanced(false);
+  };
 
   const handleExport = async () => {
     setExporting(true);
@@ -110,6 +178,52 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">Enhanced language (optional)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>{enhancedSummary}</p>
+          <div className="flex items-center justify-between rounded-2xl border bg-muted/40 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">Rewrite-only mode</p>
+              <p className="text-xs text-muted-foreground">
+                Uses a language model to improve tone only. Insights stay grounded in your entries.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enhancedEnabled}
+              onClick={handleEnhancedToggle}
+              disabled={!canToggleEnhanced}
+              className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition",
+                enhancedEnabled ? "bg-foreground" : "bg-muted",
+                !canToggleEnhanced && "cursor-not-allowed opacity-60"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-5 w-5 transform rounded-full bg-background shadow transition",
+                  enhancedEnabled ? "translate-x-5" : "translate-x-1"
+                )}
+              />
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Toggle off anytime. We only send the structured plan, not your full entry history.
+          </p>
+          {prefStatus && (
+            <p
+              className={`text-sm ${prefStatus.tone === "error" ? "text-destructive" : "text-emerald-600"}`}
+            >
+              {prefStatus.message}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="text-base">Privacy & Safety</CardTitle>
@@ -194,6 +308,26 @@ export default function SettingsPage() {
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
               {deleting ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={consentOpen} onOpenChange={setConsentOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enable enhanced language?</DialogTitle>
+            <DialogDescription>
+              This optional mode uses a language model to rewrite responses only. It does not
+              change meaning or add new advice. You can turn it off anytime.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConsentOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleConsentConfirm} disabled={updatingEnhanced}>
+              {updatingEnhanced ? "Enabling..." : "I consent"}
             </Button>
           </div>
         </DialogContent>

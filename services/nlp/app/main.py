@@ -27,7 +27,7 @@ from .pipeline import (
     get_embedding_model,
     get_emotion_pipeline,
 )
-from .companion import build_chat_turn, build_prompts
+from .companion import build_prompts, build_reflection_plan, render_plan_to_message
 from .safety import detect_crisis
 from .themes import recompute_themes
 from .weekly import build_weekly_reflection
@@ -153,29 +153,14 @@ def chat_turn(payload: ChatTurnRequest) -> ChatTurnResponse:
         len(payload.latest_user_message),
     )
     safety = detect_crisis(payload.latest_user_message)
-    if safety.get("crisis"):
-        return ChatTurnResponse(
-            assistant={
-                "message": "I'm really sorry you're feeling this way. You deserve support. "
-                "If you're in immediate danger, please contact your local emergency number. "
-                "Consider reaching out to someone you trust.",
-                "follow_up_question": None,
-                "reflection": {
-                    "emotion": "support_needed",
-                    "themes": [],
-                    "supportive_nudge": "You don't have to carry this alone.",
-                },
-                "evidence": [],
-            },
-            safety=safety,
-        )
-
-    assistant = build_chat_turn(
+    plan = build_reflection_plan(
         user_id=payload.user_id,
         selected_prompt=payload.selected_prompt,
         latest_user_message=payload.latest_user_message,
         retrieved_entries=payload.retrieved_entries,
         time_budget=payload.time_budget,
         mood=payload.mood,
+        safety=safety,
     )
-    return ChatTurnResponse(assistant=assistant, safety=safety)
+    assistant_message = render_plan_to_message(plan)
+    return ChatTurnResponse(plan=plan, assistant_message=assistant_message, safety=safety)
