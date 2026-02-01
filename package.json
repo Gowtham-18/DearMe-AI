@@ -1,0 +1,21 @@
+﻿{
+  "name": "dearme-ai",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @dearme/web dev\" \"python -m uvicorn services.nlp.main:app --reload --port 8000\"",
+    "dev:web": "pnpm --filter @dearme/web dev",
+    "dev:nlp": "python -m uvicorn services.nlp.main:app --reload --port 8000",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "concurrently": "9.2.1"
+  }
+}

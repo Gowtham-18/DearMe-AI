@@ -1,0 +1,22 @@
+﻿# Keep repository normalized
+* text=auto
+
+# Force LF for code/config (recommended)
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.cjs  text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.txt  text eol=lf
+*.py   text eol=lf
+*.sh   text eol=lf
+
+# Windows scripts (if you add any later)
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf

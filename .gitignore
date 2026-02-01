@@ -1,0 +1,10 @@
+﻿node_modules
+.next
+.env
+.env.local
+.env.*.local
+!.env.example
+services/nlp/.venv
+__pycache__
+*.pyc
+dist
