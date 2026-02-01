@@ -5,6 +5,8 @@ export async function deleteUserInsights(userId: string): Promise<DbResult<null>
   try {
     const supabase = getSupabaseBrowserClient();
     const tables = [
+      "journal_turns",
+      "journal_sessions",
       "entry_analysis",
       "theme_membership",
       "themes",

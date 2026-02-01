@@ -37,6 +37,7 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 SENTIMENT_MODEL_NAME = os.getenv(
     "SENTIMENT_MODEL_NAME", "distilbert-base-uncased-finetuned-sst-2-english"
 )
+EMOTION_MODEL_NAME = os.getenv("EMOTION_MODEL_NAME", "j-hartmann/emotion-english-distilroberta-base")
 
 MOOD_SCALE = {
     "Sad": 1,
@@ -59,6 +60,13 @@ def get_sentiment_pipeline():
     if hf_pipeline is None:
         return None
     return hf_pipeline("sentiment-analysis", model=SENTIMENT_MODEL_NAME)
+
+
+@lru_cache(maxsize=1)
+def get_emotion_pipeline():
+    if hf_pipeline is None:
+        return None
+    return hf_pipeline("text-classification", model=EMOTION_MODEL_NAME, top_k=3)
 
 
 @lru_cache(maxsize=1)
@@ -136,6 +144,22 @@ def get_sentiment(text: str) -> Tuple[str, float]:
         return sentiment_from_transformer(text)
     except Exception:
         return sentiment_from_vader(text)
+
+
+def get_emotion(text: str) -> str:
+    pipeline = get_emotion_pipeline()
+    if pipeline is None:
+        return "neutral"
+    try:
+        result = pipeline(text, truncation=True)
+        if isinstance(result, list) and result and isinstance(result[0], list):
+            best = max(result[0], key=lambda item: item.get("score", 0))
+            return str(best.get("label", "neutral")).lower()
+        if isinstance(result, list) and result:
+            return str(result[0].get("label", "neutral")).lower()
+    except Exception:
+        return "neutral"
+    return "neutral"
 
 
 def extract_keyphrases(text: str, top_n: int = 8) -> List[str]:

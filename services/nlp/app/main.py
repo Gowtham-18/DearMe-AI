@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, List
+from typing import Dict
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .models import (
     AnalyzeEntryRequest,
     AnalyzeEntryResponse,
+    ChatTurnRequest,
+    ChatTurnResponse,
     GeneratePromptsRequest,
     GeneratePromptsResponse,
     RecomputeThemesRequest,
@@ -16,8 +18,16 @@ from .models import (
     WeeklyReflectionRequest,
     WeeklyReflectionResponse,
 )
-from .pipeline import embed_text, extract_keyphrases, get_keybert, get_sentiment, get_sentiment_pipeline, get_embedding_model
-from .prompts import generate_prompts
+from .pipeline import (
+    embed_text,
+    extract_keyphrases,
+    get_keybert,
+    get_sentiment,
+    get_sentiment_pipeline,
+    get_embedding_model,
+    get_emotion_pipeline,
+)
+from .companion import build_chat_turn, build_prompts
 from .safety import detect_crisis
 from .themes import recompute_themes
 from .weekly import build_weekly_reflection
@@ -45,6 +55,7 @@ def warm_models() -> None:
     try:
         get_embedding_model()
         get_sentiment_pipeline()
+        get_emotion_pipeline()
         get_keybert()
         logger.info("NLP models loaded")
     except Exception:
@@ -111,6 +122,60 @@ def weekly_reflection(payload: WeeklyReflectionRequest) -> WeeklyReflectionRespo
 
 @app.post("/generate-prompts", response_model=GeneratePromptsResponse)
 def generate_prompts_handler(payload: GeneratePromptsRequest) -> GeneratePromptsResponse:
-    logger.info("generate_prompts user_id=%s themes=%s", payload.user_id, len(payload.themes))
-    prompts = generate_prompts(payload.themes, payload.sentiment_avg, payload.last_mood)
-    return GeneratePromptsResponse(prompts=prompts)
+    logger.info(
+        "generate_prompts user_id=%s recent=%s similar=%s",
+        payload.user_id,
+        len(payload.recent_entries),
+        len(payload.similar_entries),
+    )
+    combined_text = " ".join(entry.text for entry in payload.recent_entries + payload.similar_entries)
+    safety = detect_crisis(combined_text)
+    if safety.get("crisis"):
+        return GeneratePromptsResponse(prompts=[], safety=safety)
+
+    prompts = build_prompts(
+        user_id=payload.user_id,
+        recent_entries=payload.recent_entries,
+        similar_entries=payload.similar_entries,
+        themes=payload.themes,
+        mood=payload.mood,
+        time_budget=payload.time_budget,
+    )
+    return GeneratePromptsResponse(prompts=prompts, safety=safety)
+
+
+@app.post("/chat-turn", response_model=ChatTurnResponse)
+def chat_turn(payload: ChatTurnRequest) -> ChatTurnResponse:
+    logger.info(
+        "chat_turn user_id=%s session_id=%s msg_len=%s",
+        payload.user_id,
+        payload.session_id,
+        len(payload.latest_user_message),
+    )
+    safety = detect_crisis(payload.latest_user_message)
+    if safety.get("crisis"):
+        return ChatTurnResponse(
+            assistant={
+                "message": "I'm really sorry you're feeling this way. You deserve support. "
+                "If you're in immediate danger, please contact your local emergency number. "
+                "Consider reaching out to someone you trust.",
+                "follow_up_question": None,
+                "reflection": {
+                    "emotion": "support_needed",
+                    "themes": [],
+                    "supportive_nudge": "You don't have to carry this alone.",
+                },
+                "evidence": [],
+            },
+            safety=safety,
+        )
+
+    assistant = build_chat_turn(
+        user_id=payload.user_id,
+        selected_prompt=payload.selected_prompt,
+        latest_user_message=payload.latest_user_message,
+        retrieved_entries=payload.retrieved_entries,
+        time_budget=payload.time_budget,
+        mood=payload.mood,
+    )
+    return ChatTurnResponse(assistant=assistant, safety=safety)

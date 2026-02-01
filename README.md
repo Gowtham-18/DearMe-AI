@@ -56,7 +56,8 @@ pnpm dev
 1) Create a Supabase project.
 2) In the Supabase SQL editor, run `docs/db/schema.sql`.
 3) Then run `docs/db/schema-phase2.sql` to enable analysis + pgvector tables.
-4) Copy environment variables into `apps/web/.env.local`:
+4) Then run `docs/db/schema-phase3.sql` to enable journaling chat sessions.
+5) Copy environment variables into `apps/web/.env.local`:
 ```
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...

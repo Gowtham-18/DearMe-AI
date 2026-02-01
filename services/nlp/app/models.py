@@ -94,12 +94,77 @@ class WeeklyReflectionResponse(BaseModel):
     safety: SafetyResult
 
 
+class ContextEntry(BaseModel):
+    entry_id: str
+    text: str
+    created_at: Optional[str] = None
+    mood: Optional[str] = None
+    source: Optional[str] = None
+
+
+class PromptEvidence(BaseModel):
+    entry_id: Optional[str] = None
+    snippet: str
+    reason: str
+
+
+class PromptItem(BaseModel):
+    id: str
+    text: str
+    reason: str
+    evidence: List[PromptEvidence] = []
+
+
 class GeneratePromptsRequest(BaseModel):
     user_id: str
+    recent_entries: List[ContextEntry] = []
+    similar_entries: List[ContextEntry] = []
     themes: List[str] = []
-    sentiment_avg: float = 0.0
-    last_mood: Optional[str] = None
+    mood: Optional[str] = None
+    time_budget: int = 5
 
 
 class GeneratePromptsResponse(BaseModel):
-    prompts: List[str]
+    prompts: List[PromptItem]
+    safety: SafetyResult
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatTurnRequest(BaseModel):
+    user_id: str
+    session_id: str
+    selected_prompt: str
+    history: List[ChatMessage] = []
+    latest_user_message: str
+    time_budget: int = 5
+    mood: Optional[str] = None
+    retrieved_entries: List[ContextEntry] = []
+
+
+class ReflectionPayload(BaseModel):
+    emotion: str
+    themes: List[str]
+    supportive_nudge: str
+
+
+class AssistantEvidence(BaseModel):
+    source: str
+    entry_id: Optional[str] = None
+    snippet: str
+    reason: str
+
+
+class AssistantTurn(BaseModel):
+    message: str
+    follow_up_question: Optional[str] = None
+    reflection: ReflectionPayload
+    evidence: List[AssistantEvidence] = []
+
+
+class ChatTurnResponse(BaseModel):
+    assistant: AssistantTurn
+    safety: SafetyResult

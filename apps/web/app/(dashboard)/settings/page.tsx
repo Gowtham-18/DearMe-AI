@@ -18,6 +18,7 @@ import { deleteProfile, getProfile } from "@/lib/db/profiles";
 import { listEntryAnalysis } from "@/lib/db/analysis";
 import { listThemes, listThemeMembership } from "@/lib/db/themes";
 import { listWeeklyReflections } from "@/lib/db/weekly";
+import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
 import { deleteUserInsights } from "@/lib/db/cleanup";
 
 export default function SettingsPage() {
@@ -44,6 +45,8 @@ export default function SettingsPage() {
         themes?.map((theme) => theme.id) ?? []
       );
       const { data: weekly } = await listWeeklyReflections(userId, 12);
+      const { data: sessions } = await listSessions(userId, 50);
+      const { data: turns } = await listTurnsByUser(userId, 500);
 
       const payload = {
         profile: profileData,
@@ -52,6 +55,8 @@ export default function SettingsPage() {
         themes: themes ?? [],
         theme_membership: memberships ?? [],
         weekly_reflections: weekly ?? [],
+        journal_sessions: sessions ?? [],
+        journal_turns: turns ?? [],
         exported_at: new Date().toISOString(),
       };
 

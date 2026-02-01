@@ -99,11 +99,81 @@ export const weeklyReflectionResponseSchema = z.object({
 
 export const generatePromptsRequestSchema = z.object({
   user_id: z.string().min(1),
-  themes: z.array(z.string()).default([]),
-  sentiment_avg: z.number(),
-  last_mood: z.string().nullable().optional(),
+  recent_entries: z
+    .array(
+      z.object({
+        entry_id: z.string().min(1),
+        text: z.string().min(1),
+        created_at: z.string().optional(),
+        mood: z.string().nullable().optional(),
+      })
+    )
+    .optional(),
+  similar_entries: z
+    .array(
+      z.object({
+        entry_id: z.string().min(1),
+        text: z.string().min(1),
+        created_at: z.string().optional(),
+        mood: z.string().nullable().optional(),
+      })
+    )
+    .optional(),
+  themes: z.array(z.string()).optional(),
+  mood: z.string().nullable().optional(),
+  time_budget: z.number().optional(),
 });
 
 export const generatePromptsResponseSchema = z.object({
-  prompts: z.array(z.string()),
+  prompts: z.array(
+    z.object({
+      id: z.string(),
+      text: z.string(),
+      reason: z.string(),
+      evidence: z.array(
+        z.object({
+          entry_id: z.string().nullable().optional(),
+          snippet: z.string(),
+          reason: z.string(),
+        })
+      ),
+    })
+  ),
+  safety: safetyResultSchema,
+});
+
+export const chatTurnRequestSchema = z.object({
+  user_id: z.string().min(1),
+  session_id: z.string().min(1),
+  selected_prompt: z.string().min(1),
+  history: z.array(
+    z.object({
+      role: z.enum(["assistant", "user"]),
+      content: z.string().min(1),
+    })
+  ),
+  latest_user_message: z.string().min(1),
+  time_budget: z.number(),
+  mood: z.string().nullable().optional(),
+});
+
+export const chatTurnResponseSchema = z.object({
+  assistant: z.object({
+    message: z.string(),
+    follow_up_question: z.string().nullable().optional(),
+    reflection: z.object({
+      emotion: z.string(),
+      themes: z.array(z.string()),
+      supportive_nudge: z.string(),
+    }),
+    evidence: z.array(
+      z.object({
+        source: z.enum(["current_message", "past_entry"]),
+        entry_id: z.string().nullable().optional(),
+        snippet: z.string(),
+        reason: z.string(),
+      })
+    ),
+  }),
+  safety: safetyResultSchema,
 });

@@ -1,54 +1,43 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, SendHorizontal } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { journalPrompts, moodOptions, timeBudgets } from "@/lib/prompts";
-import {
-  createEntry,
-  getEntryForDate,
-  listEntries,
-  updateEntry,
-  type EntryRecord,
-} from "@/lib/db/entries";
+import { moodOptions, timeBudgets } from "@/lib/prompts";
+import { getEntryForDate, type EntryRecord } from "@/lib/db/entries";
 import { formatLocalDate } from "@/lib/date";
-import { computeCurrentStreak } from "@/lib/streaks";
 import { useSessionStore } from "@/store/use-session-store";
+import {
+  createSession,
+  createTurn,
+  getActiveSession,
+  type JournalSessionRecord,
+} from "@/lib/db/sessions";
 
 const defaultTimeBudget = 5;
 
-const getNudge = (currentMood: string | null, budget: number) => {
-  if (currentMood === "Stressed") {
-    return "Try one calming sentence before you close the day.";
-  }
-  if (currentMood === "Sad") {
-    return "Name one kind thing you can do for yourself tomorrow.";
-  }
-  if (currentMood === "Happy") {
-    return "Capture what made this moment feel light so you can return to it.";
-  }
-  if (budget <= 3) {
-    return "One clear sentence is enough for today.";
-  }
-  return "Notice one small shift you want to carry into tomorrow.";
-};
-
 export default function JournalForm() {
   const { ensureUserId } = useSessionStore();
+  const router = useRouter();
   const [entry, setEntry] = useState<EntryRecord | null>(null);
-  const [content, setContent] = useState("");
+  const [activeSession, setActiveSession] = useState<JournalSessionRecord | null>(null);
   const [mood, setMood] = useState<string | null>(null);
   const [timeBudget, setTimeBudget] = useState<number>(defaultTimeBudget);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reward, setReward] = useState<string | null>(null);
-  const [analysisNotice, setAnalysisNotice] = useState<string | null>(null);
-  const [prompts, setPrompts] = useState<string[]>(journalPrompts);
+  const [prompts, setPrompts] = useState<
+    Array<{
+      id: string;
+      text: string;
+      reason: string;
+      evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
+    }>
+  >([]);
   const [promptsLoading, setPromptsLoading] = useState(true);
   const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
 
@@ -57,18 +46,23 @@ export default function JournalForm() {
   useEffect(() => {
     const loadEntry = async () => {
       const userId = ensureUserId();
-      const { data, error: entryError } = await getEntryForDate(userId, todayKey);
+      const [{ data: entryData, error: entryError }, { data: sessionData }] = await Promise.all([
+        getEntryForDate(userId, todayKey),
+        getActiveSession(userId, todayKey),
+      ]);
       if (entryError) {
         setError("We couldn't load today's entry.");
         setLoading(false);
         return;
       }
 
-      if (data) {
-        setEntry(data);
-        setContent(data.content);
-        setMood(data.mood ?? null);
-        setTimeBudget(data.time_budget);
+      if (entryData) {
+        setEntry(entryData);
+        setMood(entryData.mood ?? null);
+        setTimeBudget(entryData.time_budget);
+      }
+      if (sessionData) {
+        setActiveSession(sessionData);
       }
       setLoading(false);
     };
@@ -80,14 +74,19 @@ export default function JournalForm() {
     const loadPrompts = async () => {
       const userId = ensureUserId();
       try {
-        const response = await fetch("/api/prompts", {
+        const response = await fetch("/api/generate-prompts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId }),
+          body: JSON.stringify({ userId, mood, timeBudget }),
         });
         if (response.ok) {
           const data = (await response.json()) as {
-            prompts?: string[];
+            prompts?: Array<{
+              id: string;
+              text: string;
+              reason: string;
+              evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
+            }>;
             safety?: { crisis?: boolean; reason?: string | null };
           };
           if (data.safety?.crisis) {
@@ -107,88 +106,36 @@ export default function JournalForm() {
     };
 
     loadPrompts();
-  }, [ensureUserId]);
+  }, [ensureUserId, mood, timeBudget]);
 
-  const triggerAnalysis = async (entryId: string) => {
-    try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entryId }),
-      });
-      if (!response.ok) {
-        setAnalysisNotice("Insights will update shortly.");
-      } else {
-        setAnalysisNotice(null);
-      }
-    } catch {
-      setAnalysisNotice("Insights will update shortly.");
-    }
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
+  const handlePromptSelect = async (prompt: { id: string; text: string }) => {
+    setStarting(true);
     setError(null);
-    setReward(null);
-    setAnalysisNotice(null);
+    const userId = ensureUserId();
 
-    if (!content.trim()) {
-      setError("Please write a few thoughts before saving.");
-      setSaving(false);
+    const { data, error: sessionError } = await createSession({
+      user_id: userId,
+      entry_date: todayKey,
+      selected_prompt_id: prompt.id,
+      selected_prompt_text: prompt.text,
+      status: "ACTIVE",
+    });
+
+    if (sessionError || !data) {
+      setError("We couldn't start a session yet. Please try again.");
+      setStarting(false);
       return;
     }
 
-    const userId = ensureUserId();
-    if (entry) {
-      const { data, error: updateError } = await updateEntry(entry.id, {
-        content: content.trim(),
-        mood,
-        time_budget: timeBudget,
-      });
+    await createTurn({
+      session_id: data.id,
+      user_id: userId,
+      role: "assistant",
+      content: prompt.text,
+    });
 
-      if (updateError || !data) {
-        setError("We couldn't update your entry yet. Please try again.");
-        setSaving(false);
-        return;
-      }
-
-      setEntry(data);
-      void triggerAnalysis(data.id);
-    } else {
-      const { data, error: createError } = await createEntry({
-        user_id: userId,
-        entry_date: todayKey,
-        mood,
-        time_budget: timeBudget,
-        content: content.trim(),
-      });
-
-      if (createError || !data) {
-        const { data: existingEntry } = await getEntryForDate(userId, todayKey);
-        if (existingEntry) {
-          setEntry(existingEntry);
-          setContent(existingEntry.content);
-          setMood(existingEntry.mood ?? null);
-          setTimeBudget(existingEntry.time_budget);
-          setError("You've already written today. You can update this entry.");
-          setSaving(false);
-          return;
-        }
-
-        setError("We couldn't save your entry yet. Please try again.");
-        setSaving(false);
-        return;
-      }
-
-      setEntry(data);
-      void triggerAnalysis(data.id);
-    }
-
-    const { data: entries } = await listEntries(userId, 365);
-    const streak = computeCurrentStreak(entries);
-    const nudge = getNudge(mood, timeBudget);
-    setReward(`Hurray, Day ${streak} completed! ${nudge}`);
-    setSaving(false);
+    setStarting(false);
+    router.push(`/journal/session/${data.id}`);
   };
 
   return (
@@ -201,7 +148,7 @@ export default function JournalForm() {
         {entry && (
           <Badge variant="secondary" className="gap-1">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            Already written today
+            Entry saved today
           </Badge>
         )}
       </div>
@@ -210,6 +157,17 @@ export default function JournalForm() {
         <div className="rounded-2xl border p-4 text-sm text-muted-foreground">Loading...</div>
       ) : (
         <>
+          {activeSession && (
+            <Card className="border-dashed p-4 text-sm text-muted-foreground">
+              You already have an active session today.
+              <Button
+                className="mt-3"
+                onClick={() => router.push(`/journal/session/${activeSession.id}`)}
+              >
+                Continue session
+              </Button>
+            </Card>
+          )}
           <div className="space-y-3">
             <p className="text-sm font-medium">Mood (optional)</p>
             <div className="flex flex-wrap gap-2">
@@ -242,40 +200,46 @@ export default function JournalForm() {
 
           <div className="rounded-2xl border bg-muted/40 p-4 text-sm text-muted-foreground">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-              Gentle prompts
+              AI prompts
             </p>
             {safetyNotice ? (
               <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
             ) : promptsLoading ? (
               <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
             ) : (
-              <ul className="mt-2 list-disc space-y-1 pl-4">
+              <div className="mt-4 space-y-3">
+                {prompts.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    No prompts yet. Save more entries to see personalized prompts.
+                  </p>
+                )}
                 {prompts.map((prompt) => (
-                  <li key={prompt}>{prompt}</li>
+                  <button
+                    key={prompt.id}
+                    type="button"
+                    onClick={() => handlePromptSelect(prompt)}
+                    className="w-full rounded-2xl border bg-background p-4 text-left transition hover:border-foreground/20"
+                    disabled={starting || Boolean(activeSession)}
+                  >
+                    <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
+                    {prompt.evidence?.length > 0 && (
+                      <div className="mt-2 space-y-2">
+                        {prompt.evidence.map((item, index) => (
+                          <div key={`${prompt.id}-${index}`} className="rounded-xl bg-muted/60 p-3">
+                            <p className="text-xs text-muted-foreground">{item.reason}</p>
+                            <p className="text-xs text-muted-foreground">"{item.snippet}"</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </button>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
 
-          <div className="rounded-2xl border bg-background p-3">
-            <Textarea
-              className="min-h-[160px] resize-none border-none p-0 focus-visible:ring-0"
-              placeholder="Type your thoughts..."
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-            />
-          </div>
-
           {error && <p className="text-sm text-destructive">{error}</p>}
-          {reward && <p className="text-sm text-emerald-600">{reward}</p>}
-          {analysisNotice && <p className="text-sm text-muted-foreground">{analysisNotice}</p>}
-
-          <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={saving} className="gap-2">
-              {saving ? "Saving..." : "Save"}
-              <SendHorizontal className="h-4 w-4" />
-            </Button>
-          </div>
         </>
       )}
     </Card>

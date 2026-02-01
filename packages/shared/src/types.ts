@@ -85,11 +85,48 @@ export interface WeeklyReflectionResponse {
 
 export interface GeneratePromptsRequest {
   user_id: string;
-  themes: string[];
-  sentiment_avg: number;
-  last_mood?: string | null;
+  recent_entries?: Array<{ entry_id: string; text: string; created_at?: string; mood?: string | null }>;
+  similar_entries?: Array<{ entry_id: string; text: string; created_at?: string; mood?: string | null }>;
+  themes?: string[];
+  mood?: string | null;
+  time_budget?: number;
 }
 
 export interface GeneratePromptsResponse {
-  prompts: string[];
+  prompts: Array<{
+    id: string;
+    text: string;
+    reason: string;
+    evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
+  }>;
+  safety: SafetyResult;
+}
+
+export interface ChatTurnRequest {
+  user_id: string;
+  session_id: string;
+  selected_prompt: string;
+  history: Array<{ role: "assistant" | "user"; content: string }>;
+  latest_user_message: string;
+  time_budget: number;
+  mood?: string | null;
+}
+
+export interface ChatTurnResponse {
+  assistant: {
+    message: string;
+    follow_up_question?: string | null;
+    reflection: {
+      emotion: string;
+      themes: string[];
+      supportive_nudge: string;
+    };
+    evidence: Array<{
+      source: "current_message" | "past_entry";
+      entry_id?: string | null;
+      snippet: string;
+      reason: string;
+    }>;
+  };
+  safety: SafetyResult;
 }
