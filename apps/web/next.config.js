@@ -1,4 +1,6 @@
-﻿const isProd = process.env.NODE_ENV === "production";
+﻿const path = require("path");
+
+const isProd = process.env.NODE_ENV === "production";
 
 const csp = [
   "default-src 'self'",
@@ -14,6 +16,9 @@ const csp = [
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@dearme/shared"],
+  turbopack: {
+    root: path.join(__dirname, "..", ".."),
+  },
   async headers() {
     return [
       {
