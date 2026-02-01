@@ -57,7 +57,9 @@ pnpm dev:nlp
 - Output: `.next`
 
 ### NLP (Render)
-- Start command: `uvicorn services.nlp.main:app --host 0.0.0.0 --port 8000`
+- Root directory: `services/nlp`
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 - Add environment variables from `.env.example`
 
 ## Security Notes
