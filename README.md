@@ -1,4 +1,4 @@
-﻿# DearMe AI Monorepo
+﻿# DearMe AI
 
 AI-powered journaling companion with a Next.js web app and FastAPI NLP service.
 
