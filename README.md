@@ -17,7 +17,7 @@ The system is intentionally architected with security, scalability, and modulari
 - Incremental scaling from MVP to production-grade deployment
 - Future migration toward self-hosted AI models for data sovereignty
 
-Presentation / Video submission Link (Loom) :
+Presentation / Video submission Link (Loom) : https://www.loom.com/share/8f82ead3ceab4e45a47688b1ff367281
 
 ## 2. Design Goals & Principles
 
