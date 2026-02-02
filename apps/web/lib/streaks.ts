@@ -1,12 +1,29 @@
-﻿import type { EntryRecord } from "@/lib/db/entries";
+import type { EntryRecord } from "@/lib/db/entries";
 import { formatLocalDate, parseLocalDate } from "@/lib/date";
+
+const getLatestEntriesByDate = (entries: EntryRecord[]): EntryRecord[] => {
+  const latestByDate = new Map<string, EntryRecord>();
+  entries.forEach((entry) => {
+    const existing = latestByDate.get(entry.entry_date);
+    if (!existing) {
+      latestByDate.set(entry.entry_date, entry);
+      return;
+    }
+    const existingTime = existing.created_at ?? "";
+    const entryTime = entry.created_at ?? "";
+    if (entryTime > existingTime) {
+      latestByDate.set(entry.entry_date, entry);
+    }
+  });
+  return [...latestByDate.values()];
+};
 
 export function computeCurrentStreak(entries: EntryRecord[]): number {
   if (entries.length === 0) {
     return 0;
   }
 
-  const dateSet = new Set(entries.map((entry) => entry.entry_date));
+  const dateSet = new Set(getLatestEntriesByDate(entries).map((entry) => entry.entry_date));
   const today = new Date();
   const todayKey = formatLocalDate(today);
   const yesterday = new Date(today);
@@ -36,7 +53,7 @@ export function computeTotalEntries(entries: EntryRecord[]): number {
 
 export function computePrimaryMood(entries: EntryRecord[]): string {
   const moodCounts = new Map<string, number>();
-  entries.forEach((entry) => {
+  getLatestEntriesByDate(entries).forEach((entry) => {
     if (!entry.mood) return;
     const count = moodCounts.get(entry.mood) ?? 0;
     moodCounts.set(entry.mood, count + 1);
@@ -51,7 +68,7 @@ export function computePrimaryMood(entries: EntryRecord[]): string {
     }
   });
 
-  return topMood || "—";
+  return topMood || "--";
 }
 
 export function buildMoodTrend(entries: EntryRecord[], days: number): Array<{ day: string; value: number }> {
@@ -65,12 +82,13 @@ export function buildMoodTrend(entries: EntryRecord[], days: number): Array<{ da
 
   const today = new Date();
   const points: Array<{ day: string; value: number }> = [];
+  const latestByDate = getLatestEntriesByDate(entries);
 
   for (let i = days - 1; i >= 0; i -= 1) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
     const dateKey = formatLocalDate(date);
-    const entry = entries.find((item) => item.entry_date === dateKey && item.mood);
+    const entry = latestByDate.find((item) => item.entry_date === dateKey && item.mood);
 
     if (entry?.mood && moodScale[entry.mood]) {
       points.push({

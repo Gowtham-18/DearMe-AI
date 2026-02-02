@@ -15,6 +15,19 @@ def test_build_prompts_returns_items() -> None:
     assert prompts[0].text
 
 
+def test_build_prompts_returns_starters_when_empty() -> None:
+    prompts = build_prompts(
+        user_id="user-1",
+        recent_entries=[],
+        similar_entries=[],
+        themes=[],
+        mood=None,
+        time_budget=5,
+    )
+    assert len(prompts) >= 3
+    assert prompts[0].text
+
+
 def test_build_reflection_plan_has_sections() -> None:
     plan = build_reflection_plan(
         user_id="user-1",

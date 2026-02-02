@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const getNlpUrl = () =>
-  process.env.NLP_SERVICE_URL || process.env.NEXT_PUBLIC_NLP_URL || "http://localhost:8000";
+const getNlpUrl = () => process.env.NLP_SERVICE_URL || "http://localhost:8000";
 
 const serializeEmbedding = (embedding: unknown): string => {
   if (Array.isArray(embedding)) {
@@ -13,6 +12,23 @@ const serializeEmbedding = (embedding: unknown): string => {
     return embedding;
   }
   return "[]";
+};
+
+const buildFallbackPrompts = (mood: string | null, timeBudget: number) => {
+  const moodHint = mood ? `while feeling ${mood.toLowerCase()}` : "today";
+  const base = [
+    `With ${timeBudget} minutes, what feels most important to name right now?`,
+    `What moment from ${moodHint} stands out?`,
+    "What do you want to release before the day ends?",
+    "What small win do you want to remember?",
+  ];
+
+  return base.slice(0, 4).map((text, index) => ({
+    id: `starter_${index + 1}`,
+    text,
+    reason: "Starter prompt to help you begin.",
+    evidence: [],
+  }));
 };
 
 export async function POST(req: Request) {
@@ -32,8 +48,8 @@ export async function POST(req: Request) {
       .from("entries")
       .select("id, content, created_at, mood")
       .eq("user_id", userId)
-      .order("entry_date", { ascending: false })
-      .limit(3);
+      .order("created_at", { ascending: false })
+      .limit(5);
 
     const { data: lastEmbedding } = await supabase
       .from("journal_embeddings")
@@ -43,8 +59,7 @@ export async function POST(req: Request) {
       .limit(1)
       .maybeSingle();
 
-    let similarEntries: Array<{ id: string; content: string; created_at: string; mood: string | null }> =
-      [];
+    let similarEntries: Array<{ id: string; content: string; created_at: string; mood: string | null }> = [];
     if (lastEmbedding?.embedding) {
       const { data: matches, error: matchError } = await supabase.rpc("match_journal_entries", {
         target_user_id: userId,
@@ -71,38 +86,53 @@ export async function POST(req: Request) {
       .order("strength", { ascending: false })
       .limit(5);
 
-    const nlpResponse = await fetch(`${getNlpUrl()}/generate-prompts`, {
+    const payload = {
+      user_id: userId,
+      mood: mood ?? null,
+      time_budget_min: timeBudget ?? 5,
+      recent_entries: (recentEntries ?? []).map((entry) => ({
+        entry_id: entry.id,
+        text: entry.content,
+        created_at: entry.created_at,
+        mood: entry.mood,
+        source: "recent",
+      })),
+      similar_entries: similarEntries.map((entry) => ({
+        entry_id: entry.id,
+        text: entry.content,
+        created_at: entry.created_at,
+        mood: entry.mood,
+        source: "similar",
+      })),
+      themes: (themes ?? []).map((theme) => theme.label),
+    };
+
+    const nlpResponse = await fetch(`${getNlpUrl()}/v1/prompts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        recent_entries: (recentEntries ?? []).map((entry) => ({
-          entry_id: entry.id,
-          text: entry.content,
-          created_at: entry.created_at,
-          mood: entry.mood,
-          source: "recent",
-        })),
-        similar_entries: similarEntries.map((entry) => ({
-          entry_id: entry.id,
-          text: entry.content,
-          created_at: entry.created_at,
-          mood: entry.mood,
-          source: "similar",
-        })),
-        themes: (themes ?? []).map((theme) => theme.label),
-        mood: mood ?? null,
-        time_budget: timeBudget ?? 5,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!nlpResponse.ok) {
-      return NextResponse.json({ error: "Prompt generation failed." }, { status: 502 });
+      return NextResponse.json({
+        prompts: buildFallbackPrompts(mood ?? null, timeBudget ?? 5),
+        safety: { crisis: false, reason: null },
+      });
     }
 
     const data = await nlpResponse.json();
+    if (!data?.prompts || data.prompts.length === 0) {
+      return NextResponse.json({
+        prompts: buildFallbackPrompts(mood ?? null, timeBudget ?? 5),
+        safety: { crisis: false, reason: null },
+      });
+    }
+
     return NextResponse.json(data);
   } catch (err) {
-    return NextResponse.json({ error: "Unexpected error." }, { status: 500 });
+    return NextResponse.json({
+      prompts: buildFallbackPrompts(null, 5),
+      safety: { crisis: false, reason: null },
+    });
   }
 }

@@ -31,6 +31,8 @@ export async function getEntryForDate(
       .select("*")
       .eq("user_id", userId)
       .eq("entry_date", entryDate)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (error) {
@@ -55,7 +57,7 @@ export async function listEntries(
       .from("entries")
       .select("*")
       .eq("user_id", userId)
-      .order("entry_date", { ascending: false })
+      .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) {

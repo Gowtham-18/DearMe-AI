@@ -1,7 +1,7 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Filter } from "lucide-react";
 
 import { listEntries, type EntryRecord } from "@/lib/db/entries";
@@ -9,6 +9,7 @@ import { formatDisplayDate } from "@/lib/date";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
 
 export default function MemoriesPage() {
@@ -16,6 +17,11 @@ export default function MemoriesPage() {
   const [entries, setEntries] = useState<EntryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const emptyCopy = useMemo(
+    () => pickCopy(emptyStateCopy.memories, new Date().toDateString()),
+    []
+  );
 
   useEffect(() => {
     const loadEntries = async () => {
@@ -49,7 +55,7 @@ export default function MemoriesPage() {
       <section className="space-y-3">
         {loading && <Card className="p-4 text-sm text-muted-foreground">Loading entries...</Card>}
         {!loading && entries.length === 0 && (
-          <Card className="p-4 text-sm text-muted-foreground">No entries yet.</Card>
+          <Card className="p-4 text-sm text-muted-foreground">{emptyCopy}</Card>
         )}
         {entries.map((entry, index) => {
           const showDateHeading =
@@ -62,7 +68,7 @@ export default function MemoriesPage() {
                 </p>
               )}
               <Link href={`/memories/${entry.id}`}>
-                <Card className="p-4 shadow-sm transition hover:border-foreground/20">
+                <Card className="p-4 transition hover:border-foreground/20">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-semibold">{entry.mood ?? "No mood"}</p>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CheckCircle2 } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,9 +16,12 @@ import {
   createTurn,
   listTurns,
   updateSessionStatus,
+  getSession,
   type JournalTurnRecord,
 } from "@/lib/db/sessions";
-import { getEntryForDate, createEntry, updateEntry } from "@/lib/db/entries";
+import { createEntry, listEntries } from "@/lib/db/entries";
+import { updateProfilePreferences } from "@/lib/db/profiles";
+import { cn } from "@/lib/utils";
 
 interface SessionPageProps {
   params: { session_id: string };
@@ -26,7 +30,7 @@ interface SessionPageProps {
 export default function JournalSessionPage({ params }: SessionPageProps) {
   const router = useRouter();
   const { ensureUserId } = useSessionStore();
-  const { profile } = useProfileStore();
+  const { profile, setProfile, setPreferences } = useProfileStore();
   const [turns, setTurns] = useState<JournalTurnRecord[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -37,11 +41,23 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
   const [timeBudget, setTimeBudget] = useState<number>(5);
   const [finishing, setFinishing] = useState(false);
   const [finishMessage, setFinishMessage] = useState<string | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<"ACTIVE" | "COMPLETED">("ACTIVE");
+  const [showEnhancedNotice, setShowEnhancedNotice] = useState(false);
+  const [updatingEnhanced, setUpdatingEnhanced] = useState(false);
+
   const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
+  const enhancedConsent = profile?.preferences?.enhanced_consent ?? false;
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
 
   useEffect(() => {
+    const loadSession = async () => {
+      const { data: sessionData } = await getSession(params.session_id);
+      if (sessionData?.status) {
+        setSessionStatus(sessionData.status);
+      }
+    };
+
     const loadTurns = async () => {
       const { data, error: loadError } = await listTurns(params.session_id);
       if (loadError) {
@@ -53,12 +69,56 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
       setLoading(false);
     };
 
+    loadSession();
     loadTurns();
   }, [params.session_id]);
+
+  const persistPreferences = async (nextPreferences: {
+    enhanced_language_enabled: boolean;
+    enhanced_consent: boolean;
+  }) => {
+    setPreferences(nextPreferences);
+    if (!profile) return;
+
+    const { data, error } = await updateProfilePreferences(profile.user_id, nextPreferences);
+    if (error) {
+      return;
+    }
+    if (data) {
+      setProfile({
+        user_id: data.user_id,
+        name: data.name,
+        age: data.age,
+        occupation: data.occupation ?? undefined,
+        preferences: data.preferences ?? nextPreferences,
+        createdAt: data.created_at ?? new Date().toISOString(),
+      });
+    }
+  };
+
+  const handleEnhancedToggle = async () => {
+    if (updatingEnhanced || !profile) return;
+    setUpdatingEnhanced(true);
+
+    const nextEnabled = !enhancedEnabled;
+    const nextConsent = enhancedConsent || nextEnabled;
+    await persistPreferences({
+      enhanced_language_enabled: nextEnabled,
+      enhanced_consent: nextConsent,
+    });
+
+    if (!enhancedConsent && nextEnabled) {
+      setShowEnhancedNotice(true);
+      setTimeout(() => setShowEnhancedNotice(false), 4500);
+    }
+
+    setUpdatingEnhanced(false);
+  };
 
   const handleSend = async () => {
     if (!input.trim()) return;
     if (safetyNotice) return;
+    if (sessionStatus === "COMPLETED") return;
 
     setSending(true);
     setError(null);
@@ -83,7 +143,7 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
     setInput("");
 
     try {
-      const response = await fetch("/api/chat-turn", {
+      const response = await fetch("/api/chat/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -134,7 +194,8 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
     }
   };
 
-  const handleFinish = async () => {
+  const handleComplete = async () => {
+    if (sessionStatus === "COMPLETED") return;
     setFinishing(true);
     setError(null);
     const userId = ensureUserId();
@@ -142,67 +203,101 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
     const combined = userTurns.map((turn) => turn.content).join("\n\n");
 
     if (!combined.trim()) {
-      setError("Add at least one response before finishing.");
+      setError("Add at least one response before completing.");
       setFinishing(false);
       return;
     }
 
-    const { data: existing } = await getEntryForDate(userId, todayKey);
-    if (existing) {
-      const { error: updateError } = await updateEntry(existing.id, {
-        content: `${existing.content}\n\n${combined}`,
-        mood,
-        time_budget: timeBudget,
-      });
-      if (updateError) {
-        setError("We couldn't save your entry yet. Please try again.");
-        setFinishing(false);
-        return;
-      }
-    } else {
-      const { error: createError } = await createEntry({
-        user_id: userId,
-        entry_date: todayKey,
-        mood,
-        time_budget: timeBudget,
-        content: combined,
-      });
-      if (createError) {
-        setError("We couldn't save your entry yet. Please try again.");
-        setFinishing(false);
-        return;
-      }
+    const { data: existingEntries } = await listEntries(userId, 1);
+    const isFirst = !existingEntries || existingEntries.length === 0;
+
+    const { error: createError, data: entryData } = await createEntry({
+      user_id: userId,
+      entry_date: todayKey,
+      mood,
+      time_budget: timeBudget,
+      content: combined,
+    });
+
+    if (createError || !entryData) {
+      setError("We couldn't save your journal yet. Please try again.");
+      setFinishing(false);
+      return;
     }
 
     await updateSessionStatus(params.session_id, "COMPLETED");
+    setSessionStatus("COMPLETED");
+    window.dispatchEvent(new Event("journal-session-updated"));
 
-    const { data: updatedEntry } = await getEntryForDate(userId, todayKey);
-    if (updatedEntry) {
-      await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entryId: updatedEntry.id }),
-      });
-    }
+    await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entryId: entryData.id }),
+    });
 
-    setFinishMessage("Hurray, Day completed! Your reflections were saved.");
-    setTimeout(() => router.push("/"), 800);
+    const baseMessage = isFirst
+      ? "Hurray! You completed your first journal. Keep it up."
+      : "Nice work. You showed up again today.";
+    setFinishMessage(`${baseMessage} Want a 2-minute reflection prompt for tomorrow?`);
+    setTimeout(() => router.push("/"), 900);
     setFinishing(false);
   };
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr,300px]">
-      <Card className="flex h-[70vh] flex-col gap-4 p-6 shadow-sm">
+      <Card className="flex h-[70vh] flex-col gap-4 p-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Journal Session</h2>
             <p className="text-xs text-muted-foreground">Private session</p>
           </div>
           <div className="flex items-center gap-2">
-            {enhancedEnabled && <Badge variant="secondary">Enhanced</Badge>}
-            <Badge variant="secondary">Active</Badge>
+            {enhancedEnabled && <Badge variant="secondary">Enhanced wording</Badge>}
+            <Badge variant="secondary">{sessionStatus === "COMPLETED" ? "Completed" : "Active"}</Badge>
+            <Button
+              size="sm"
+              onClick={handleComplete}
+              disabled={finishing || sessionStatus === "COMPLETED"}
+            >
+              {finishing ? "Completing..." : "Complete journal"}
+            </Button>
           </div>
         </div>
+
+        <div className="flex items-center justify-between rounded-2xl border bg-muted/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-foreground">Enhanced wording (optional)</p>
+            <p className="text-xs text-muted-foreground">
+              Improves tone only. Insights remain grounded in your entries.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enhancedEnabled}
+            onClick={handleEnhancedToggle}
+            disabled={!profile}
+            className={cn(
+              "relative inline-flex h-6 w-11 items-center rounded-full transition",
+              enhancedEnabled ? "bg-foreground" : "bg-muted",
+              !profile && "cursor-not-allowed opacity-60"
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block h-5 w-5 transform rounded-full bg-background shadow transition",
+                enhancedEnabled ? "translate-x-5" : "translate-x-1"
+              )}
+            />
+          </button>
+        </div>
+
+        {showEnhancedNotice && (
+          <Card className="border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
+            We send only a short structured plan (not your full history) to OpenAI to improve
+            wording. You can turn this off anytime.
+          </Card>
+        )}
 
         <div className="flex-1 space-y-3 overflow-y-auto rounded-2xl border bg-background p-4">
           {loading && <p className="text-sm text-muted-foreground">Loading session...</p>}
@@ -241,24 +336,22 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
             placeholder="Type your thoughts..."
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            disabled={sending || Boolean(safetyNotice)}
+            disabled={sending || Boolean(safetyNotice) || sessionStatus === "COMPLETED"}
           />
-          <Button onClick={handleSend} disabled={sending || Boolean(safetyNotice)}>
+          <Button
+            onClick={handleSend}
+            disabled={sending || Boolean(safetyNotice) || sessionStatus === "COMPLETED"}
+          >
             {sending ? "Sending..." : "Send"}
           </Button>
         </div>
 
         <div className="flex justify-between">
-          <Button variant="outline" onClick={() => router.push("/journal")}>
-            Back
-          </Button>
-          <Button onClick={handleFinish} disabled={finishing}>
-            {finishing ? "Finishing..." : "Finish session"}
-          </Button>
+          <Button variant="outline" onClick={() => router.push("/journal")}>Back</Button>
         </div>
       </Card>
 
-      <Card className="space-y-4 p-6 shadow-sm">
+      <Card className="space-y-4 p-6">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Mood</p>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -289,6 +382,12 @@ export default function JournalSessionPage({ params }: SessionPageProps) {
             ))}
           </div>
         </div>
+        {sessionStatus === "COMPLETED" && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            Completed
+          </div>
+        )}
       </Card>
     </div>
   );

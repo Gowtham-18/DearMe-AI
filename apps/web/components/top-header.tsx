@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { Bell, Search, ShieldCheck, Sparkles } from "lucide-react";
 
@@ -22,7 +22,7 @@ export default function TopHeader() {
     : "AN";
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card px-4 py-3 shadow-sm md:flex-nowrap">
+    <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card px-4 py-3 md:flex-nowrap">
       <div className="relative w-full max-w-xl flex-1">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input className="pl-9" placeholder="Search memories..." />
@@ -31,7 +31,7 @@ export default function TopHeader() {
         {enhancedEnabled && (
           <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">
             <Sparkles className="h-3.5 w-3.5" />
-            Enhanced
+            Enhanced wording
           </Badge>
         )}
         <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">

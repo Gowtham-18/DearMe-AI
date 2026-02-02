@@ -12,3 +12,4 @@ torch==2.2.2
 keybert==0.8.5
 yake==0.4.8
 vaderSentiment==3.3.2
+openai==1.61.0

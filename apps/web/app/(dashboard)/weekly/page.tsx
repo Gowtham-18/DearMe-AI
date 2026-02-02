@@ -80,7 +80,7 @@ export default function WeeklyPage() {
         <>
           <section className="grid gap-4 md:grid-cols-3">
             {reflection.summary_blocks.map((block) => (
-              <Card key={block.title} className="shadow-sm">
+              <Card key={block.title}>
                 <CardHeader>
                   <CardTitle className="text-sm text-muted-foreground">{block.title}</CardTitle>
                 </CardHeader>
@@ -90,7 +90,7 @@ export default function WeeklyPage() {
           </section>
 
           <section className="grid gap-4 lg:grid-cols-[2fr,1fr]">
-            <Card className="shadow-sm">
+            <Card>
               <CardHeader>
                 <CardTitle className="text-base">Evidence Cards</CardTitle>
               </CardHeader>
@@ -104,7 +104,7 @@ export default function WeeklyPage() {
               </CardContent>
             </Card>
 
-            <Card className="shadow-sm">
+            <Card>
               <CardHeader>
                 <CardTitle className="text-base">Try this prompt next week</CardTitle>
               </CardHeader>

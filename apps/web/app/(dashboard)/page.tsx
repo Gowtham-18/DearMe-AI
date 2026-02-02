@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import Greeting from "@/components/dashboard/greeting";
 import MoodTrendsChart from "@/components/dashboard/mood-trends-chart";
@@ -14,9 +14,37 @@ import { listEntries, type EntryRecord } from "@/lib/db/entries";
 import { listEntryAnalysis, type EntryAnalysisRecord } from "@/lib/db/analysis";
 import { listThemes, listThemeMembership, type ThemeMembershipRecord, type ThemeRecord } from "@/lib/db/themes";
 import { buildHabitDays, buildSentimentTrend } from "@/lib/analysis";
-import { formatDisplayDate, shiftDate } from "@/lib/date";
+import { formatDisplayDate, parseLocalDate, shiftDate } from "@/lib/date";
 import { buildMoodTrend, computeCurrentStreak, computePrimaryMood, computeTotalEntries } from "@/lib/streaks";
 import { useSessionStore } from "@/store/use-session-store";
+
+const getLatestEntriesByDate = (entries: EntryRecord[]): Map<string, EntryRecord> => {
+  const latestByDate = new Map<string, EntryRecord>();
+  entries.forEach((entry) => {
+    const existing = latestByDate.get(entry.entry_date);
+    if (!existing) {
+      latestByDate.set(entry.entry_date, entry);
+      return;
+    }
+    const existingTime = existing.created_at ?? "";
+    const entryTime = entry.created_at ?? "";
+    if (entryTime > existingTime) {
+      latestByDate.set(entry.entry_date, entry);
+    }
+  });
+  return latestByDate;
+};
+
+const isWithinRange = (dateString: string, start: Date, end: Date) => {
+  const date = parseLocalDate(dateString);
+  return date >= start && date <= end;
+};
+
+const buildSnippet = (text: string, limit = 140) => {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= limit) return cleaned;
+  return `${cleaned.slice(0, limit)}...`;
+};
 
 export default function DashboardPage() {
   const { ensureUserId } = useSessionStore();
@@ -31,8 +59,8 @@ export default function DashboardPage() {
     const loadEntries = async () => {
       const userId = ensureUserId();
       const [entriesRes, analysisRes, themesRes] = await Promise.all([
-        listEntries(userId, 100),
-        listEntryAnalysis(userId, 120),
+        listEntries(userId, 120),
+        listEntryAnalysis(userId, 160),
         listThemes(userId, 5),
       ]);
 
@@ -80,64 +108,115 @@ export default function DashboardPage() {
   const sentimentTrend30 = buildSentimentTrend(entries, analyses, 30);
   const habitDays = buildHabitDays(entries);
 
-  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
-  const entryByDate = new Map(entries.map((entry) => [entry.entry_date, entry]));
-  const analysisByEntry = new Map(analyses.map((item) => [item.entry_id, item]));
+  const entryById = useMemo(() => new Map(entries.map((entry) => [entry.id, entry])), [entries]);
+  const entryByDate = useMemo(() => getLatestEntriesByDate(entries), [entries]);
+  const themeLabelById = useMemo(
+    () => new Map(themes.map((theme) => [theme.id, theme.label])),
+    [themes]
+  );
 
-  const themeCards = themes.map((theme) => {
-    const themeMembers = membership.filter((item) => item.theme_id === theme.id);
-    const memberEntry = themeMembers[0] ? entryById.get(themeMembers[0].entry_id) : null;
-    const snippet = memberEntry?.content ?? null;
-
-    const relatedEntries = themeMembers.slice(0, 3).map((member) => {
-      const entry = entryById.get(member.entry_id);
-      if (!entry) {
-        return null;
-      }
-      return {
-        id: entry.id,
-        date: formatDisplayDate(entry.entry_date),
-        snippet: entry.content.length > 140 ? `${entry.content.slice(0, 140)}...` : entry.content,
-      };
-    }).filter(Boolean) as Array<{ id: string; date: string; snippet: string }>;
-
-    const precedingCounts = new Map<string, number>();
-    themeMembers.forEach((member) => {
-      const entry = entryById.get(member.entry_id);
-      if (!entry) return;
-      const prevDate = shiftDate(entry.entry_date, -1);
-      const prevEntry = entryByDate.get(prevDate);
-      if (!prevEntry) return;
-
-      if (prevEntry.mood) {
-        const key = `Mood: ${prevEntry.mood}`;
-        precedingCounts.set(key, (precedingCounts.get(key) ?? 0) + 1);
-      }
-
-      const prevAnalysis = analysisByEntry.get(prevEntry.id);
-      if (Array.isArray(prevAnalysis?.keyphrases)) {
-        prevAnalysis.keyphrases.forEach((phrase) => {
-          const key = `Theme: ${phrase}`;
-          precedingCounts.set(key, (precedingCounts.get(key) ?? 0) + 1);
-        });
-      }
+  const themeLabelsByEntry = useMemo(() => {
+    const mapping = new Map<string, string[]>();
+    membership.forEach((member) => {
+      const label = themeLabelById.get(member.theme_id);
+      if (!label) return;
+      const existing = mapping.get(member.entry_id) ?? [];
+      mapping.set(member.entry_id, [...existing, label]);
     });
+    return mapping;
+  }, [membership, themeLabelById]);
 
-    const precededBy = [...precedingCounts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([label]) => label);
+  const themeCards = useMemo(() => {
+    const today = new Date();
+    const recentStart = new Date(today);
+    recentStart.setDate(today.getDate() - 6);
+    const prevStart = new Date(today);
+    prevStart.setDate(today.getDate() - 13);
+    const prevEnd = new Date(today);
+    prevEnd.setDate(today.getDate() - 7);
 
-    return {
-      id: theme.id,
-      label: theme.label,
-      keywords: Array.isArray(theme.keywords) ? theme.keywords : [],
-      strength: theme.strength ?? 0,
-      snippet: snippet ? `${snippet.slice(0, 120)}${snippet.length > 120 ? "..." : ""}` : null,
-      relatedEntries,
-      precededBy,
-    };
-  });
+    return themes.map((theme) => {
+      const themeMembers = membership.filter((item) => item.theme_id === theme.id);
+      const sortedMembers = [...themeMembers].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      const memberEntry = sortedMembers[0] ? entryById.get(sortedMembers[0].entry_id) : null;
+      const snippet = memberEntry?.content ? buildSnippet(memberEntry.content, 120) : null;
+
+      const relatedEntries = sortedMembers
+        .slice(0, 3)
+        .map((member) => {
+          const entry = entryById.get(member.entry_id);
+          if (!entry) {
+            return null;
+          }
+          return {
+            id: entry.id,
+            date: formatDisplayDate(entry.entry_date),
+            snippet: buildSnippet(entry.content, 140),
+          };
+        })
+        .filter(Boolean) as Array<{ id: string; date: string; snippet: string }>;
+
+      const evidenceCards = sortedMembers
+        .slice(0, 2)
+        .map((member) => {
+          const entry = entryById.get(member.entry_id);
+          if (!entry) return null;
+          return {
+            entry_id: entry.id,
+            snippet: buildSnippet(entry.content, 120),
+            reason: "Appears strongly in this theme.",
+          };
+        })
+        .filter(Boolean) as Array<{ entry_id: string; snippet: string; reason: string }>;
+
+      const precedingCounts = new Map<string, number>();
+      themeMembers.forEach((member) => {
+        const entry = entryById.get(member.entry_id);
+        if (!entry) return;
+        const prevDate = shiftDate(entry.entry_date, -1);
+        const prevEntry = entryByDate.get(prevDate);
+        if (!prevEntry) return;
+        const prevThemes = themeLabelsByEntry.get(prevEntry.id) ?? [];
+        prevThemes.forEach((label) => {
+          if (label === theme.label) return;
+          precedingCounts.set(label, (precedingCounts.get(label) ?? 0) + 1);
+        });
+      });
+
+      const precededBy = [...precedingCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([label]) => label);
+
+      const recentCount = themeMembers.filter((member) => {
+        const entry = entryById.get(member.entry_id);
+        if (!entry) return false;
+        return isWithinRange(entry.entry_date, recentStart, today);
+      }).length;
+
+      const prevCount = themeMembers.filter((member) => {
+        const entry = entryById.get(member.entry_id);
+        if (!entry) return false;
+        return isWithinRange(entry.entry_date, prevStart, prevEnd);
+      }).length;
+
+      const trendValue = prevCount === 0 ? (recentCount > 0 ? 100 : 0) : Math.round(((recentCount - prevCount) / prevCount) * 100);
+      const trend = trendValue > 5 ? "up" : trendValue < -5 ? "down" : "flat";
+
+      return {
+        id: theme.id,
+        label: theme.label,
+        keywords: Array.isArray(theme.keywords) ? theme.keywords : [],
+        strength: theme.strength ?? 0,
+        snippet,
+        relatedEntries,
+        precededBy,
+        trend,
+        trendValue,
+        evidenceCards,
+      };
+    });
+  }, [themes, membership, entryById, entryByDate, themeLabelsByEntry]);
 
   return (
     <div className="space-y-8">
@@ -168,7 +247,7 @@ export default function DashboardPage() {
           value={total === 1 ? "1 entry" : `${total} entries`}
           trend="Up to date"
         />
-        <StatCard title="Primary mood" value={primaryMood} trend={primaryMood === "—" ? "Add a mood" : "Stable"} />
+        <StatCard title="Primary mood" value={primaryMood} trend={primaryMood === "--" ? "Add a mood" : "Stable"} />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">

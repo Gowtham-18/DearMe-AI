@@ -1,6 +1,8 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   BarChart3,
   BookOpen,
@@ -13,6 +15,9 @@ import {
 import Logo from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { createSession, createTurn } from "@/lib/db/sessions";
+import { formatLocalDate } from "@/lib/date";
+import { useSessionStore } from "@/store/use-session-store";
 
 const navItems = [
   { label: "Today's Journal", href: "/journal", icon: PenLine },
@@ -23,6 +28,43 @@ const navItems = [
 ];
 
 export default function Sidebar({ activePath }: { activePath: string }) {
+  const router = useRouter();
+  const { ensureUserId } = useSessionStore();
+  const [creating, setCreating] = useState(false);
+
+  const handleNewEntry = async () => {
+    if (creating) return;
+    setCreating(true);
+    const userId = ensureUserId();
+    const todayKey = formatLocalDate(new Date());
+    const promptText = "What feels most important to explore right now?";
+
+    const { data, error } = await createSession({
+      user_id: userId,
+      entry_date: todayKey,
+      selected_prompt_id: "prompt_new_entry",
+      selected_prompt_text: promptText,
+      status: "ACTIVE",
+      title: "New journal session",
+    });
+
+    if (error || !data) {
+      setCreating(false);
+      return;
+    }
+
+    await createTurn({
+      session_id: data.id,
+      user_id: userId,
+      role: "assistant",
+      content: promptText,
+    });
+
+    window.dispatchEvent(new Event("journal-session-updated"));
+    setCreating(false);
+    router.push(`/journal/session/${data.id}`);
+  };
+
   return (
     <aside className="hidden h-screen w-64 flex-col border-r bg-background px-5 py-6 md:flex md:fixed md:inset-y-0">
       <Logo />
@@ -46,9 +88,9 @@ export default function Sidebar({ activePath }: { activePath: string }) {
         })}
       </nav>
       <div className="mt-auto">
-        <Button className="w-full gap-2">
+        <Button className="w-full gap-2" onClick={handleNewEntry} disabled={creating}>
           <Plus className="h-4 w-4" />
-          New Entry
+          {creating ? "Starting..." : "New Entry"}
         </Button>
       </div>
     </aside>

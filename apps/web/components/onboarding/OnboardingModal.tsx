@@ -50,7 +50,7 @@ export default function OnboardingModal() {
     }
   }, [status, profile]);
 
-  const title = useMemo(() => "Welcome to DearMe", []);
+  const title = useMemo(() => "Welcome to DearMe AI", []);
 
   const handleSubmit = async () => {
     const parsed = onboardingSchema.safeParse({

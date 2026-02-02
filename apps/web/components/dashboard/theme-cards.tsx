@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -9,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 
 export interface ThemeCardItem {
   id: string;
@@ -18,6 +20,9 @@ export interface ThemeCardItem {
   snippet: string | null;
   relatedEntries?: Array<{ id: string; date: string; snippet: string }>;
   precededBy?: string[];
+  trend?: "up" | "down" | "flat";
+  trendValue?: number;
+  evidenceCards?: Array<{ entry_id: string; snippet: string; reason: string }>;
 }
 
 interface ThemeCardsProps {
@@ -27,10 +32,14 @@ interface ThemeCardsProps {
 export default function ThemeCards({ themes }: ThemeCardsProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeTheme = themes.find((theme) => theme.id === activeId) ?? null;
+  const emptyCopy = useMemo(
+    () => pickCopy(emptyStateCopy.themes, new Date().toDateString()),
+    []
+  );
 
   return (
     <>
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader>
           <CardTitle className="text-base">Themes</CardTitle>
           <p className="text-sm text-muted-foreground">Patterns from your entries</p>
@@ -38,7 +47,7 @@ export default function ThemeCards({ themes }: ThemeCardsProps) {
         <CardContent className="space-y-3">
           {themes.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No themes yet. Keep journaling to see patterns.
+              {emptyCopy}
             </p>
           ) : (
             themes.map((theme) => (
@@ -50,8 +59,13 @@ export default function ThemeCards({ themes }: ThemeCardsProps) {
               >
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">{theme.label}</p>
-                  <span className="text-xs text-muted-foreground">
-                    {Math.round(theme.strength * 100)}%
+                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {theme.trend === "up" && <ArrowUpRight className="h-3.5 w-3.5 text-emerald-500" />}
+                    {theme.trend === "down" && <ArrowDownRight className="h-3.5 w-3.5 text-rose-500" />}
+                    {theme.trend === "flat" && <Minus className="h-3.5 w-3.5 text-muted-foreground" />}
+                    {typeof theme.trendValue === "number"
+                      ? `${theme.trendValue > 0 ? "+" : ""}${theme.trendValue}%`
+                      : `${Math.round(theme.strength * 100)}%`}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -86,6 +100,22 @@ export default function ThemeCards({ themes }: ThemeCardsProps) {
                       <p className="text-sm">{entry.snippet}</p>
                     </div>
                   ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  Evidence cards
+                </p>
+                <div className="mt-2 space-y-2">
+                  {(activeTheme.evidenceCards ?? []).map((card) => (
+                    <div key={card.entry_id} className="rounded-xl border bg-background p-3">
+                      <p className="text-xs text-muted-foreground">{card.reason}</p>
+                      <p className="text-sm">{card.snippet}</p>
+                    </div>
+                  ))}
+                  {(activeTheme.evidenceCards ?? []).length === 0 && (
+                    <p className="text-xs text-muted-foreground">No evidence cards yet.</p>
+                  )}
                 </div>
               </div>
               <div>

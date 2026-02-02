@@ -7,7 +7,9 @@ export interface JournalSessionRecord {
   entry_date: string;
   selected_prompt_id: string;
   selected_prompt_text: string;
+  title: string | null;
   status: "ACTIVE" | "COMPLETED";
+  completed_at: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -49,7 +51,12 @@ export async function getActiveSession(
 export async function createSession(
   payload: Pick<
     JournalSessionRecord,
-    "user_id" | "entry_date" | "selected_prompt_id" | "selected_prompt_text" | "status"
+    | "user_id"
+    | "entry_date"
+    | "selected_prompt_id"
+    | "selected_prompt_text"
+    | "status"
+    | "title"
   >
 ): Promise<DbResult<JournalSessionRecord>> {
   try {
@@ -70,6 +77,26 @@ export async function createSession(
   }
 }
 
+export async function getSession(sessionId: string): Promise<DbResult<JournalSessionRecord>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from("journal_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .maybeSingle();
+
+    if (error) {
+      return { data: null, error: error.message };
+    }
+
+    return { data: data ?? null, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load session.";
+    return { data: null, error: message };
+  }
+}
+
 export async function updateSessionStatus(
   sessionId: string,
   status: "ACTIVE" | "COMPLETED"
@@ -78,7 +105,10 @@ export async function updateSessionStatus(
     const supabase = getSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("journal_sessions")
-      .update({ status })
+      .update({
+        status,
+        completed_at: status === "COMPLETED" ? new Date().toISOString() : null,
+      })
       .eq("id", sessionId)
       .select("*")
       .maybeSingle();

@@ -1,4 +1,4 @@
-﻿import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface StatCardProps {
@@ -9,7 +9,7 @@ interface StatCardProps {
 
 export default function StatCard({ title, value, trend }: StatCardProps) {
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader className="space-y-1">
         <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
       </CardHeader>

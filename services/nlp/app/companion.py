@@ -5,6 +5,7 @@ import random
 from typing import List, Optional, Sequence
 
 from .models import (
+    ChatMessage,
     ContextEntry,
     EvidenceCard,
     PatternConnection,
@@ -45,6 +46,25 @@ def _emotion_phrase(emotion: str) -> str:
     return mapping.get(emotion.lower(), "present")
 
 
+def _starter_prompts(mood: Optional[str], time_budget: int) -> List[PromptItem]:
+    mood_hint = f"while feeling {mood.lower()}" if mood else "today"
+    base = [
+        f"With {time_budget} minutes, what feels most important to name right now?",
+        f"What moment from {mood_hint} stands out?",
+        "What do you want to release before the day ends?",
+        "What small win do you want to remember?",
+    ]
+    return [
+        PromptItem(
+            id=f"starter_{index + 1}",
+            text=text,
+            reason="Starter prompt to help you begin.",
+            evidence=[],
+        )
+        for index, text in enumerate(base[:4])
+    ]
+
+
 def build_prompts(
     user_id: str,
     recent_entries: List[ContextEntry],
@@ -56,24 +76,28 @@ def build_prompts(
     combined = {entry.entry_id: entry for entry in recent_entries + similar_entries}
     combined_entries = list(combined.values())
 
+    if not combined_entries:
+        return _starter_prompts(mood, time_budget)
+
     keyphrases: List[str] = []
     for entry in combined_entries:
         keyphrases.extend(extract_keyphrases(entry.text, top_n=3))
 
-    topics = list(dict.fromkeys([*themes, *keyphrases]))[:4]
+    topics = list(dict.fromkeys([*themes, *keyphrases]))[:6]
     if not topics:
-        topics = ["your day", "what feels important"]
+        return _starter_prompts(mood, time_budget)
 
     tone = "brief" if time_budget <= 5 else "deeper"
     mood_hint = f"feeling {mood.lower()}" if mood else "right now"
 
-    rng = _seeded_random(user_id + (mood or ""))
+    rng = _seeded_random(user_id + (mood or "") + str(time_budget))
     templates = [
         "When {topic} shows up, what do you wish you could tell yourself?",
         "What moment from today connects with {topic}?",
         "With {minutes} minutes, what feels most important to name about {topic}?",
         "How did {topic} influence how you felt {mood_hint}?",
         "What helped you move through {topic}, even in a small way?",
+        "What do you want to remember about {topic} before the day ends?",
     ]
 
     rng.shuffle(templates)
@@ -103,6 +127,9 @@ def build_prompts(
             )
         )
 
+    if len(prompts) < 3:
+        prompts.extend(_starter_prompts(mood, time_budget))
+
     return prompts[:4]
 
 
@@ -114,6 +141,7 @@ def build_reflection_plan(
     time_budget: int,
     mood: Optional[str],
     safety: dict,
+    history: Optional[List[ChatMessage]] = None,
 ) -> ReflectionPlan:
     if safety.get("crisis"):
         return ReflectionPlan(
@@ -132,9 +160,15 @@ def build_reflection_plan(
             safety=safety,
         )
 
-    emotion = get_emotion(latest_user_message)
+    recent_history = [
+        message.content
+        for message in (history or [])
+        if message.role == "user" and message.content.strip()
+    ]
+    context_text = " ".join(recent_history[-2:] + [latest_user_message])
+    emotion = get_emotion(context_text)
     emotion_phrase = _emotion_phrase(emotion)
-    keyphrases = extract_keyphrases(latest_user_message, top_n=3)
+    keyphrases = extract_keyphrases(context_text, top_n=3)
     fallback_topic = selected_prompt.replace("?", "").strip() if selected_prompt else ""
     topic = keyphrases[0] if keyphrases else (fallback_topic or "what feels most important")
     mood_hint = f"while feeling {mood.lower()}" if mood else "right now"
@@ -154,7 +188,7 @@ def build_reflection_plan(
         validation_text = f"Thanks for sharing. That sounds {emotion_phrase}."
         reflection_text = f"It seems {topic} is really present for you {mood_hint}."
         pattern_text = (
-            f"You have mentioned {topic} before."
+            f"You've mentioned {topic} before."
             if evidence_cards
             else "It can help to notice what keeps returning."
         )
@@ -167,7 +201,7 @@ def build_reflection_plan(
             "Small details can reveal what you need most."
         )
         pattern_text = (
-            f"You have touched on {topic} before."
+            f"You've touched on {topic} before."
             if evidence_cards
             else "If a pattern is forming, it's okay to name it gently."
         )

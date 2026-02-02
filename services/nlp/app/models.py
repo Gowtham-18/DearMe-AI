@@ -144,6 +144,27 @@ class ChatTurnRequest(BaseModel):
     mood: Optional[str] = None
     retrieved_entries: List[ContextEntry] = []
 
+
+class PromptRationale(BaseModel):
+    themes_used: List[str] = []
+    mood_used: Optional[str] = None
+    time_budget_used: int = 5
+
+
+class PromptsRequestV1(BaseModel):
+    user_id: str
+    mood: Optional[str] = None
+    time_budget_min: int = 5
+    recent_entries: List[ContextEntry] = []
+    similar_entries: List[ContextEntry] = []
+    themes: List[str] = []
+
+
+class PromptsResponseV1(BaseModel):
+    prompts: List[PromptItem]
+    rationale: Optional[PromptRationale] = None
+    safety: SafetyResult
+
 class PlanSection(BaseModel):
     text: str
 
@@ -189,3 +210,32 @@ class ChatTurnResponse(BaseModel):
     plan: ReflectionPlan
     assistant_message: RenderedMessage
     safety: SafetyResult
+
+
+class ExtractedData(BaseModel):
+    sentiment: SentimentResult
+    emotions: List[str] = []
+    themes: List[str] = []
+    keyphrases: List[str] = []
+
+
+class ChatTurnRequestV1(BaseModel):
+    user_id: str
+    chat_id: str
+    selected_prompt: Optional[str] = None
+    user_message: str
+    mood: Optional[str] = None
+    time_budget_min: int = 5
+    history: List[ChatMessage] = []
+    recent_entries: List[ContextEntry] = []
+    retrieved_entries: List[ContextEntry] = []
+    enhanced_language: bool = False
+
+
+class ChatTurnResponseV1(BaseModel):
+    assistant_message: str
+    follow_up_question: str
+    extracted: ExtractedData
+    evidence: List[EvidenceCard] = []
+    safety: SafetyResult
+    mode: str = "deterministic"

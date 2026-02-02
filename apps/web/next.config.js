@@ -2,13 +2,8 @@
 
 const isProd = process.env.NODE_ENV === "production";
 
-const connectSources = ["'self'", "http://localhost:8000", "https://*.supabase.co", "wss://*.supabase.co"];
-const nlpUrl = process.env.NEXT_PUBLIC_NLP_URL;
+const connectSources = ["'self'", "https://*.supabase.co", "wss://*.supabase.co"];
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-if (nlpUrl) {
-  connectSources.push(nlpUrl);
-}
 
 if (supabaseUrl) {
   connectSources.push(supabaseUrl);

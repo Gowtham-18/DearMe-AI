@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import {
-  rewriteAssistantMessage,
-  type AssistantMessage,
-  type ReflectionPlan,
-} from "@/lib/llm/openaiRewrite";
 
-const getNlpUrl = () =>
-  process.env.NLP_SERVICE_URL || process.env.NEXT_PUBLIC_NLP_URL || "http://localhost:8000";
+const getNlpUrl = () => process.env.NLP_SERVICE_URL || "http://localhost:8000";
 
 const serializeEmbedding = (embedding: unknown): string => {
   if (Array.isArray(embedding)) {
@@ -18,17 +12,6 @@ const serializeEmbedding = (embedding: unknown): string => {
     return embedding;
   }
   return "[]";
-};
-
-const joinSections = (message: AssistantMessage) => {
-  const parts = [
-    message.validation,
-    message.reflection,
-    message.pattern_connection,
-    message.gentle_nudge,
-  ].filter(Boolean);
-  const base = parts.join(" ");
-  return message.follow_up_question ? `${base} ${message.follow_up_question}` : base;
 };
 
 export async function POST(req: Request) {
@@ -111,8 +94,8 @@ export async function POST(req: Request) {
       .from("entries")
       .select("id, content, created_at, mood")
       .eq("user_id", userId)
-      .order("entry_date", { ascending: false })
-      .limit(3);
+      .order("created_at", { ascending: false })
+      .limit(5);
 
     const recentFormatted = (recentEntries ?? []).map((entry) => ({
       entry_id: entry.id,
@@ -121,25 +104,20 @@ export async function POST(req: Request) {
       mood: entry.mood,
     }));
 
-    const mergedEntries = [
-      ...retrievedEntries,
-      ...recentFormatted.filter(
-        (entry) => !retrievedEntries.some((existing) => existing.entry_id === entry.entry_id)
-      ),
-    ];
-
-    const nlpResponse = await fetch(`${getNlpUrl()}/chat-turn`, {
+    const nlpResponse = await fetch(`${getNlpUrl()}/v1/chat/turn`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         user_id: userId,
-        session_id: sessionId,
+        chat_id: sessionId,
         selected_prompt: sessionData?.selected_prompt_text ?? "",
-        history,
-        latest_user_message: latestUserMessage,
-        time_budget: timeBudget ?? 5,
+        user_message: latestUserMessage,
         mood: mood ?? null,
-        retrieved_entries: mergedEntries,
+        time_budget_min: timeBudget ?? 5,
+        history,
+        recent_entries: recentFormatted,
+        retrieved_entries: retrievedEntries,
+        enhanced_language: enhancedLanguageEnabled ?? false,
       }),
     });
 
@@ -148,28 +126,21 @@ export async function POST(req: Request) {
     }
 
     const data = (await nlpResponse.json()) as {
-      plan?: ReflectionPlan;
-      assistant_message?: AssistantMessage;
+      assistant_message?: string;
+      follow_up_question?: string;
+      evidence?: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
       safety?: { crisis?: boolean; reason?: string | null };
+      mode?: "deterministic" | "enhanced";
     };
 
-    if (!data.plan || !data.assistant_message) {
-      return NextResponse.json({ error: "Malformed chat response." }, { status: 502 });
+    let assistantText = [data.assistant_message, data.follow_up_question]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (!assistantText) {
+      assistantText = "Thanks for sharing. What feels most important to explore next?";
     }
 
-    let assistantMessage = data.assistant_message;
-    const rewriteAttempt = enhancedLanguageEnabled && !data.plan.safety?.crisis
-      ? await rewriteAssistantMessage({
-          plan: data.plan,
-          assistantMessage: data.assistant_message,
-        })
-      : { data: null };
-
-    if (rewriteAttempt.data) {
-      assistantMessage = rewriteAttempt.data;
-    }
-
-    const assistantText = joinSections(assistantMessage);
     const { data: assistantTurn } = await supabase
       .from("journal_turns")
       .insert({
@@ -184,12 +155,11 @@ export async function POST(req: Request) {
     return NextResponse.json({
       assistant: {
         message: assistantText,
-        sections: assistantMessage,
-        evidence: data.plan.evidence_cards ?? [],
+        evidence: data.evidence ?? [],
+        mode: data.mode ?? "deterministic",
       },
       assistant_turn: assistantTurn ?? null,
-      safety: data.plan.safety ?? data.safety,
-      enhanced_language_used: Boolean(rewriteAttempt.data),
+      safety: data.safety ?? { crisis: false, reason: null },
     });
   } catch (err) {
     return NextResponse.json({ error: "Unexpected error." }, { status: 500 });

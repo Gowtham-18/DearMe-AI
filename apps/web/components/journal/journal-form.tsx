@@ -1,92 +1,79 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { moodOptions, timeBudgets } from "@/lib/prompts";
-import { getEntryForDate, type EntryRecord } from "@/lib/db/entries";
+import { moodOptions, timeBudgets, journalPrompts } from "@/lib/prompts";
 import { formatLocalDate } from "@/lib/date";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
-import {
-  createSession,
-  createTurn,
-  getActiveSession,
-  type JournalSessionRecord,
-} from "@/lib/db/sessions";
+import { useProfileStore } from "@/store/use-profile-store";
+import { createSession, createTurn } from "@/lib/db/sessions";
 
 const defaultTimeBudget = 5;
 
+type PromptItem = {
+  id: string;
+  text: string;
+  reason: string;
+  evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
+};
+
+const buildFallbackPrompts = (mood: string | null, timeBudget: number): PromptItem[] => {
+  const moodHint = mood ? `while feeling ${mood.toLowerCase()}` : "today";
+  const base = [
+    `With ${timeBudget} minutes, what feels most important to name right now?`,
+    `What moment from ${moodHint} stands out?`,
+    "What do you want to release before the day ends?",
+    "What small win do you want to remember?",
+  ];
+
+  return base.slice(0, 4).map((text, index) => ({
+    id: `starter_${index + 1}`,
+    text,
+    reason: "Starter prompt to help you begin.",
+    evidence: [],
+  }));
+};
+
 export default function JournalForm() {
   const { ensureUserId } = useSessionStore();
+  const { profile } = useProfileStore();
   const router = useRouter();
-  const [entry, setEntry] = useState<EntryRecord | null>(null);
-  const [activeSession, setActiveSession] = useState<JournalSessionRecord | null>(null);
   const [mood, setMood] = useState<string | null>(null);
   const [timeBudget, setTimeBudget] = useState<number>(defaultTimeBudget);
-  const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [prompts, setPrompts] = useState<
-    Array<{
-      id: string;
-      text: string;
-      reason: string;
-      evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
-    }>
-  >([]);
+  const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(true);
   const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
+  const [directMessage, setDirectMessage] = useState("");
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
-
-  useEffect(() => {
-    const loadEntry = async () => {
-      const userId = ensureUserId();
-      const [{ data: entryData, error: entryError }, { data: sessionData }] = await Promise.all([
-        getEntryForDate(userId, todayKey),
-        getActiveSession(userId, todayKey),
-      ]);
-      if (entryError) {
-        setError("We couldn't load today's entry.");
-        setLoading(false);
-        return;
-      }
-
-      if (entryData) {
-        setEntry(entryData);
-        setMood(entryData.mood ?? null);
-        setTimeBudget(entryData.time_budget);
-      }
-      if (sessionData) {
-        setActiveSession(sessionData);
-      }
-      setLoading(false);
-    };
-
-    loadEntry();
-  }, [ensureUserId, todayKey]);
+  const emptyCopy = useMemo(
+    () => pickCopy(emptyStateCopy.todayJournal, new Date().toDateString()),
+    []
+  );
 
   useEffect(() => {
     const loadPrompts = async () => {
       const userId = ensureUserId();
+      setPromptsLoading(true);
+      setSafetyNotice(null);
+
       try {
-        const response = await fetch("/api/generate-prompts", {
+        const response = await fetch("/api/prompts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId, mood, timeBudget }),
         });
         if (response.ok) {
           const data = (await response.json()) as {
-            prompts?: Array<{
-              id: string;
-              text: string;
-              reason: string;
-              evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
-            }>;
+            prompts?: PromptItem[];
             safety?: { crisis?: boolean; reason?: string | null };
           };
           if (data.safety?.crisis) {
@@ -96,19 +83,24 @@ export default function JournalForm() {
             setPrompts([]);
           } else if (data.prompts && data.prompts.length > 0) {
             setPrompts(data.prompts);
+          } else {
+            setPrompts(buildFallbackPrompts(mood, timeBudget));
           }
+        } else {
+          setPrompts(buildFallbackPrompts(mood, timeBudget));
         }
       } catch {
-        // fall back to default prompts
+        setPrompts(buildFallbackPrompts(mood, timeBudget));
       } finally {
         setPromptsLoading(false);
       }
     };
 
-    loadPrompts();
+    const timer = setTimeout(loadPrompts, 280);
+    return () => clearTimeout(timer);
   }, [ensureUserId, mood, timeBudget]);
 
-  const handlePromptSelect = async (prompt: { id: string; text: string }) => {
+  const startSession = async (prompt: PromptItem, initialMessage?: string) => {
     setStarting(true);
     setError(null);
     const userId = ensureUserId();
@@ -119,6 +111,7 @@ export default function JournalForm() {
       selected_prompt_id: prompt.id,
       selected_prompt_text: prompt.text,
       status: "ACTIVE",
+      title: prompt.text.slice(0, 60),
     });
 
     if (sessionError || !data) {
@@ -134,114 +127,156 @@ export default function JournalForm() {
       content: prompt.text,
     });
 
+    if (initialMessage?.trim()) {
+      await createTurn({
+        session_id: data.id,
+        user_id: userId,
+        role: "user",
+        content: initialMessage.trim(),
+      });
+
+      try {
+        await fetch("/api/chat/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            sessionId: data.id,
+            latestUserMessage: initialMessage.trim(),
+            timeBudget,
+            mood,
+            enhancedLanguageEnabled: profile?.preferences?.enhanced_language_enabled ?? false,
+          }),
+        });
+      } catch {
+        // The session is still created; the assistant response can be retried in the chat.
+      }
+    }
+
+    window.dispatchEvent(new Event("journal-session-updated"));
     setStarting(false);
+    setDirectMessage("");
     router.push(`/journal/session/${data.id}`);
   };
 
+  const handlePromptSelect = async (prompt: PromptItem) => {
+    if (safetyNotice) return;
+    await startSession(prompt);
+  };
+
+  const handleDirectStart = async () => {
+    if (!directMessage.trim() || safetyNotice) return;
+    const prompt = prompts[0] ?? {
+      id: "starter_direct",
+      text: journalPrompts[0],
+      reason: "Starter prompt",
+      evidence: [],
+    };
+    await startSession(prompt, directMessage);
+  };
+
   return (
-    <Card className="flex h-full flex-col gap-4 p-6 shadow-sm">
+    <Card className="flex h-full flex-col gap-4 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">Today's Journal</h2>
-          <p className="text-xs text-muted-foreground">Private Session</p>
+          <p className="text-xs text-muted-foreground">Private session</p>
         </div>
-        {entry && (
-          <Badge variant="secondary" className="gap-1">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Entry saved today
-          </Badge>
+        <Badge variant="secondary" className="gap-1">
+          Ready
+        </Badge>
+      </div>
+
+      <div className="space-y-3">
+        <p className="text-sm font-medium">Mood (optional)</p>
+        <div className="flex flex-wrap gap-2">
+          {moodOptions.map((option) => (
+            <Button
+              key={option}
+              variant={mood === option ? "default" : "outline"}
+              onClick={() => setMood(option)}
+              disabled={starting}
+            >
+              {option}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <p className="text-sm font-medium">Time budget</p>
+        <div className="flex flex-wrap gap-2">
+          {timeBudgets.map((option) => (
+            <Button
+              key={option}
+              variant={timeBudget === option ? "default" : "outline"}
+              onClick={() => setTimeBudget(option)}
+              disabled={starting}
+            >
+              {option} min
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border bg-muted/40 p-4 text-sm text-muted-foreground">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          AI prompts
+        </p>
+        {safetyNotice ? (
+          <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
+        ) : promptsLoading ? (
+          <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {prompts.length === 0 && (
+              <p className="text-xs text-muted-foreground">{emptyCopy}</p>
+            )}
+            {prompts.map((prompt) => (
+              <button
+                key={prompt.id}
+                type="button"
+                onClick={() => handlePromptSelect(prompt)}
+                className="w-full rounded-2xl border bg-background p-4 text-left transition hover:border-foreground/20"
+                disabled={starting}
+              >
+                <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
+                {prompt.evidence?.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {prompt.evidence.map((item, index) => (
+                      <div key={`${prompt.id}-${index}`} className="rounded-xl bg-muted/60 p-3">
+                        <p className="text-xs text-muted-foreground">{item.reason}</p>
+                        <p className="text-xs text-muted-foreground">"{item.snippet}"</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
         )}
       </div>
 
-      {loading ? (
-        <div className="rounded-2xl border p-4 text-sm text-muted-foreground">Loading...</div>
-      ) : (
-        <>
-          {activeSession && (
-            <Card className="border-dashed p-4 text-sm text-muted-foreground">
-              You already have an active session today.
-              <Button
-                className="mt-3"
-                onClick={() => router.push(`/journal/session/${activeSession.id}`)}
-              >
-                Continue session
-              </Button>
-            </Card>
-          )}
-          <div className="space-y-3">
-            <p className="text-sm font-medium">Mood (optional)</p>
-            <div className="flex flex-wrap gap-2">
-              {moodOptions.map((option) => (
-                <Button
-                  key={option}
-                  variant={mood === option ? "default" : "outline"}
-                  onClick={() => setMood(option)}
-                >
-                  {option}
-                </Button>
-              ))}
-            </div>
-          </div>
+      <div className="rounded-2xl border bg-background p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          Start without a prompt
+        </p>
+        <Textarea
+          className="mt-3 min-h-[96px]"
+          placeholder="Type your thoughts..."
+          value={directMessage}
+          onChange={(event) => setDirectMessage(event.target.value)}
+          disabled={starting || Boolean(safetyNotice)}
+        />
+        <div className="mt-3 flex justify-end">
+          <Button onClick={handleDirectStart} disabled={starting || !directMessage.trim()}>
+            {starting ? "Starting..." : "Start session"}
+          </Button>
+        </div>
+      </div>
 
-          <div className="space-y-3">
-            <p className="text-sm font-medium">Time budget</p>
-            <div className="flex flex-wrap gap-2">
-              {timeBudgets.map((option) => (
-                <Button
-                  key={option}
-                  variant={timeBudget === option ? "default" : "outline"}
-                  onClick={() => setTimeBudget(option)}
-                >
-                  {option} min
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border bg-muted/40 p-4 text-sm text-muted-foreground">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-              AI prompts
-            </p>
-            {safetyNotice ? (
-              <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
-            ) : promptsLoading ? (
-              <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
-            ) : (
-              <div className="mt-4 space-y-3">
-                {prompts.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    No prompts yet. Save more entries to see personalized prompts.
-                  </p>
-                )}
-                {prompts.map((prompt) => (
-                  <button
-                    key={prompt.id}
-                    type="button"
-                    onClick={() => handlePromptSelect(prompt)}
-                    className="w-full rounded-2xl border bg-background p-4 text-left transition hover:border-foreground/20"
-                    disabled={starting || Boolean(activeSession)}
-                  >
-                    <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
-                    {prompt.evidence?.length > 0 && (
-                      <div className="mt-2 space-y-2">
-                        {prompt.evidence.map((item, index) => (
-                          <div key={`${prompt.id}-${index}`} className="rounded-xl bg-muted/60 p-3">
-                            <p className="text-xs text-muted-foreground">{item.reason}</p>
-                            <p className="text-xs text-muted-foreground">"{item.snippet}"</p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
-        </>
-      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
     </Card>
   );
 }

@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const getNlpUrl = () =>
-  process.env.NLP_SERVICE_URL || process.env.NEXT_PUBLIC_NLP_URL || "http://localhost:8000";
+const getNlpUrl = () => process.env.NLP_SERVICE_URL || "http://localhost:8000";
 
 export async function POST(req: Request) {
   try {
@@ -70,10 +69,41 @@ export async function POST(req: Request) {
 
     const { data: themes } = await supabase
       .from("themes")
-      .select("label, keywords, strength")
+      .select("id, label, keywords, strength")
       .eq("user_id", userId)
       .order("strength", { ascending: false })
       .limit(5);
+
+    let themedPayload: Array<Record<string, unknown>> = themes ?? [];
+    if (themes && themes.length > 0) {
+      const themeIds = themes.map((theme) => theme.id);
+      const { data: membership } = await supabase
+        .from("theme_membership")
+        .select("theme_id, entry_id, score")
+        .eq("user_id", userId)
+        .in("theme_id", themeIds);
+
+      const entryMap = new Map(entries.map((entry) => [entry.id, entry.content]));
+
+      const membersByTheme = new Map<string, Array<{ entry_id: string; snippet: string; reason: string }>>();
+      (membership ?? []).forEach((member) => {
+        const snippet = entryMap.get(member.entry_id) ?? "";
+        if (!snippet) return;
+        const existing = membersByTheme.get(member.theme_id) ?? [];
+        if (existing.length >= 3) return;
+        existing.push({
+          entry_id: member.entry_id,
+          snippet: snippet.length > 140 ? `${snippet.slice(0, 140)}...` : snippet,
+          reason: "Evidence from a related entry.",
+        });
+        membersByTheme.set(member.theme_id, existing);
+      });
+
+      themedPayload = themes.map((theme) => ({
+        ...theme,
+        members: membersByTheme.get(theme.id) ?? [],
+      }));
+    }
 
     const nlpResponse = await fetch(`${getNlpUrl()}/weekly-reflection`, {
       method: "POST",
@@ -81,7 +111,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         user_id: userId,
         entries: payloadEntries,
-        themes: themes ?? [],
+        themes: themedPayload,
       }),
     });
 

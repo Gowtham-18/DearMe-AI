@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -13,6 +13,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { cn } from "@/lib/utils";
 
 export type MoodPoint = { day: string; value: number };
@@ -25,9 +26,13 @@ interface MoodTrendsChartProps {
 export default function MoodTrendsChart({ data7, data30 }: MoodTrendsChartProps) {
   const [range, setRange] = useState<"7d" | "30d">("7d");
   const data = range === "7d" ? data7 : data30;
+  const emptyCopy = useMemo(
+    () => pickCopy(emptyStateCopy.mood, new Date().toDateString()),
+    []
+  );
 
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <CardTitle className="text-base">Mood Trends</CardTitle>
@@ -52,7 +57,7 @@ export default function MoodTrendsChart({ data7, data30 }: MoodTrendsChartProps)
       <CardContent className="h-[280px]">
         {data.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            No mood data yet. Add a mood to your journal to see trends.
+            {emptyCopy}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">

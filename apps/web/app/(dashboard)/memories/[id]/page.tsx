@@ -114,7 +114,7 @@ export default function MemoryDetailPage({ params }: MemoryDetailPageProps) {
               Keyphrases:{" "}
               {Array.isArray(analysis.keyphrases) && analysis.keyphrases.length
                 ? analysis.keyphrases.join(", ")
-                : "—"}
+                : "--"}
             </p>
             {analysis.safety_flags?.crisis && (
               <p className="text-destructive">

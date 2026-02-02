@@ -7,7 +7,7 @@ export default function Logo() {
         <Sparkles className="h-4 w-4" />
       </div>
       <div>
-        <p className="text-sm font-semibold">DearMe</p>
+        <p className="text-sm font-semibold">DearMe AI</p>
         <p className="text-xs text-muted-foreground">Journaling Companion</p>
       </div>
     </div>

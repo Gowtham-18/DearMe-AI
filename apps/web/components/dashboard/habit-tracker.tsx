@@ -13,7 +13,7 @@ interface HabitTrackerProps {
 
 export default function HabitTracker({ days }: HabitTrackerProps) {
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader>
         <CardTitle className="text-base">Weekly Habit Tracker</CardTitle>
         <p className="text-sm text-muted-foreground">Days you showed up this week</p>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -13,6 +13,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { cn } from "@/lib/utils";
 
 export type SentimentPoint = { day: string; value: number };
@@ -25,9 +26,13 @@ interface SentimentTrendsChartProps {
 export default function SentimentTrendsChart({ data7, data30 }: SentimentTrendsChartProps) {
   const [range, setRange] = useState<"7d" | "30d">("7d");
   const data = range === "7d" ? data7 : data30;
+  const emptyCopy = useMemo(
+    () => pickCopy(emptyStateCopy.sentiment, new Date().toDateString()),
+    []
+  );
 
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <CardTitle className="text-base">Sentiment Trend</CardTitle>
@@ -38,7 +43,10 @@ export default function SentimentTrendsChart({ data7, data30 }: SentimentTrendsC
             <Button
               key={value}
               variant="ghost"
-              className={cn("h-9 rounded-full px-4", range === value && "bg-muted text-foreground")}
+              className={cn(
+                "h-9 rounded-full px-4",
+                range === value && "bg-muted text-foreground"
+              )}
               onClick={() => setRange(value)}
             >
               {value === "7d" ? "Last 7 days" : "Last 30 days"}
@@ -49,7 +57,7 @@ export default function SentimentTrendsChart({ data7, data30 }: SentimentTrendsC
       <CardContent className="h-[280px]">
         {data.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            No sentiment data yet. Save a journal entry to see trends.
+            {emptyCopy}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">

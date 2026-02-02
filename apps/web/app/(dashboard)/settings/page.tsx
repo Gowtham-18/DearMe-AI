@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useMemo, useState } from "react";
 
@@ -43,8 +43,8 @@ export default function SettingsPage() {
   const enhancedSummary = useMemo(
     () =>
       enhancedEnabled
-        ? "Enhanced language is on."
-        : "Enhanced language uses a model to rephrase responses only.",
+        ? "Enhanced wording is on."
+        : "Enhanced wording uses a model to rephrase responses only.",
     [enhancedEnabled]
   );
 
@@ -132,7 +132,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `dearme-export-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `dearme-ai-export-${new Date().toISOString().slice(0, 10)}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
 
@@ -178,9 +178,9 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enhanced language (optional)</CardTitle>
+          <CardTitle className="text-base">Enhanced wording (optional)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>{enhancedSummary}</p>
@@ -224,7 +224,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader>
           <CardTitle className="text-base">Privacy & Safety</CardTitle>
         </CardHeader>
@@ -252,7 +252,7 @@ export default function SettingsPage() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="shadow-sm">
+        <Card>
           <CardHeader>
             <CardTitle className="text-base">Model limitations</CardTitle>
           </CardHeader>
@@ -262,7 +262,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm">
+        <Card>
           <CardHeader>
             <CardTitle className="text-base">Safety note</CardTitle>
           </CardHeader>
@@ -273,7 +273,7 @@ export default function SettingsPage() {
         </Card>
       </div>
 
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader>
           <CardTitle className="text-base">Crisis routing</CardTitle>
         </CardHeader>
@@ -283,7 +283,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card className="shadow-sm">
+      <Card>
         <CardHeader>
           <CardTitle className="text-base">Data minimization & consent</CardTitle>
         </CardHeader>
@@ -316,7 +316,7 @@ export default function SettingsPage() {
       <Dialog open={consentOpen} onOpenChange={setConsentOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Enable enhanced language?</DialogTitle>
+            <DialogTitle>Enable enhanced wording?</DialogTitle>
             <DialogDescription>
               This optional mode uses a language model to rewrite responses only. It does not
               change meaning or add new advice. You can turn it off anytime.
