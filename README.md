@@ -2,6 +2,298 @@
 
 AI-powered journaling companion with a Next.js web app, FastAPI NLP service, and Supabase persistence.
 
+---
+
+# DearMe AI – System Design & Architecture Documentation
+
+## 1. Overview
+
+DearMe AI is a privacy-first, AI-powered journaling and self-reflection web application designed to help users build emotional awareness, identify behavioral patterns, and track mental well-being over time.
+
+The system is intentionally architected with security, scalability, and modularity as first-class concerns, enabling:
+
+- Safe handling of sensitive user-generated content
+- Optional AI augmentation with strict guardrails
+- Incremental scaling from MVP to production-grade deployment
+- Future migration toward self-hosted AI models for data sovereignty
+
+Presentation / Video submission Link (Loom) :
+
+## 2. Design Goals & Principles
+
+### 2.1 Core Design Goals
+
+1. Privacy by Design
+   - Journals may contain highly sensitive personal data
+   - No unnecessary data retention or model training on user content
+   - Explicit AI toggle with transparent behavior
+
+2. Security-First Architecture
+   - Zero-trust assumptions between services
+   - Strong isolation between frontend, backend, and AI services
+   - Rate limiting and abuse prevention at multiple layers
+
+3. Scalability & Fault Isolation
+   - Horizontally scalable stateless services
+   - Async processing for AI workloads
+   - Graceful degradation when AI services are unavailable
+
+4. Explainability & Trust
+   - Deterministic, non-LLM fallbacks
+   - Evidence-backed insights rather than opaque AI outputs
+   - Clear UI signals when AI is involved
+
+5. Extensibility
+   - Modular pipelines for NLP, embeddings, and analytics
+   - Easy replacement of third-party APIs with self-hosted models
+
+## 3. High-Level System Architecture
+
+### 3.1 Architecture Style
+
+- Client–Server with Microservice Separation
+- Event-driven AI processing
+- Stateless application services
+- Database-backed persistence layer
+
+Primary Components
+
+- Web Client (Next.js)
+- API & Application Layer
+- AI/NLP Microservice
+- Persistent Storage
+- Observability & Security Controls
+
+## 4. Technology Stack
+
+### 4.1 Frontend Layer
+
+Framework & UI
+
+- Next.js (App Router)
+- TypeScript
+- Tailwind CSS
+- shadcn/ui
+
+Why
+
+- Server Components for reduced client attack surface
+- Type safety for large-scale maintainability
+- Consistent UI primitives with accessibility baked in
+
+Security Considerations
+
+- No direct database access from client
+- CSP headers enforced at deployment
+- Sanitized rendering of user-generated content
+
+### 4.2 Backend & API Layer
+
+Runtime
+
+- Node.js (Edge + Server Functions)
+- RESTful APIs with structured JSON contracts
+
+Responsibilities
+
+- Journal lifecycle management
+- Session handling
+- Feature gating (AI vs non-AI mode)
+- Rate limiting enforcement
+- Request validation and schema enforcement
+
+Design Choices
+
+- Stateless APIs enable horizontal scaling
+- Strict request schemas reduce injection risk
+- Explicit separation of AI-triggering endpoints
+
+### 4.3 Database & Storage Layer
+
+Primary Database
+
+- PostgreSQL (Supabase)
+
+Extensions
+
+- pgvector (future-ready for embeddings)
+
+Stored Data
+
+- Journal entries
+- Mood signals
+- Sentiment scores
+- Metadata (timestamps, anonymized user_id)
+
+Why PostgreSQL
+
+- Strong transactional guarantees
+- Mature security model
+- Native JSON + vector support
+
+Security Controls
+
+- Row Level Security (RLS)
+- Least-privilege service roles
+- Encrypted at rest
+
+### 4.4 AI / NLP Microservice
+
+Runtime
+
+- Python
+- FastAPI
+
+Deployed Separately
+
+- Enables fault isolation
+- Independent scaling
+- Easier model replacement
+
+NLP Capabilities
+
+| Function             | Model / Technique                  |
+| -------------------- | ---------------------------------- |
+| Embeddings           | SentenceTransformers               |
+| Sentiment            | Small Transformer + VADER fallback |
+| Keyword Extraction   | KeyBERT                            |
+| Fallback Keywords    | YAKE                               |
+| Clustering (small n) | KMeans                             |
+| Clustering (large n) | HDBSCAN                            |
+
+Why Hybrid NLP
+
+- Avoids single-model dependency
+- Deterministic fallbacks improve reliability
+- Predictable performance for security-sensitive environments
+
+LLM Usage
+
+- Optional
+- Explicit user-controlled toggle
+- Strict output schema validation
+- Refusal rules for unsafe prompts
+
+## 5. Caching Strategy
+
+### 5.1 Client-Side Caching
+
+- SWR-style data fetching
+- Optimistic UI updates
+- Short-lived cache for insights dashboards
+
+### 5.2 Server-Side Caching
+
+- Derived analytics cached per journal batch
+- Idempotent AI results stored to prevent re-computation
+
+Benefits
+
+- Reduced AI costs
+- Lower latency
+- Protection against replay abuse
+
+## 6. Rate Limiting & Abuse Prevention
+
+### 6.1 Rate Limiting Layers
+
+| Layer      | Mechanism                 |
+| ---------- | ------------------------- |
+| Edge       | IP-based throttling       |
+| API        | User/session-based limits |
+| AI Service | Token and request quotas  |
+
+Why Multi-Layer
+
+- Defense in depth
+- Prevents AI endpoint exhaustion
+- Protects against automated scraping
+
+## 7. Scalability Considerations
+
+### 7.1 Horizontal Scaling
+
+- Stateless API servers
+- Independent AI service scaling
+- Database connection pooling
+
+### 7.2 Async Processing
+
+- AI tasks processed out-of-band
+- UI remains responsive
+- Failure does not block journaling
+
+## 8. Observability & Monitoring
+
+Metrics
+
+- Request latency
+- AI error rates
+- Journal creation throughput
+
+Logging
+
+- Structured logs
+- No raw journal text in logs
+- Trace IDs across services
+
+Alerts
+
+- AI service degradation
+- Rate limit anomalies
+- Database saturation
+
+## 9. Security Considerations
+
+- Zero-trust service boundaries
+- No training on user data
+- Explicit AI involvement indicators
+- Input sanitization and schema validation
+- No cross-tenant data access
+- Strict environment variable isolation
+- Preparedness for SOC2-style audits
+
+## 10. Future Enhancements
+
+### 10.1 Authentication & Identity
+
+- OAuth (Google, Apple)
+- Optional anonymous-to-auth migration
+- Device-based trust signals
+
+### 10.2 Self-Hosted AI Models
+
+- On-prem or VPC-deployed LLMs
+- Fine-tuned journaling-specific models
+- Full data sovereignty
+- No third-party inference leakage
+
+### 10.3 Advanced Analytics
+
+- Long-term habit correlation
+- Personalized reflection prompts
+- Explainable trend insights
+
+### 10.4 Enterprise-Grade Deployment
+
+- Kubernetes-based orchestration
+- mTLS between services
+- Secrets management via vaults
+- Multi-region failover
+
+## 11. Conclusion
+
+DearMe AI is designed not merely as a journaling application, but as a secure, explainable, and scalable AI-assisted system that respects user privacy while enabling meaningful insights.
+
+The architecture reflects modern secure system design principles aligned with Palo Alto Networks’ expectations:
+
+- Defense in depth
+- Transparent AI usage
+- Modular, auditable components
+- Production-ready scalability
+
+---
+
 ## Overview
 - apps/web: Next.js (App Router, TypeScript) UI
 - services/nlp: FastAPI service (local NLP pipeline)
