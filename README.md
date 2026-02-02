@@ -18,6 +18,7 @@ The system is intentionally architected with security, scalability, and modulari
 - Future migration toward self-hosted AI models for data sovereignty
 
 Presentation / Video submission Link (Loom) : https://www.loom.com/share/8f82ead3ceab4e45a47688b1ff367281
+Please check the complete working app here : https://dear-me-ai-webapp.vercel.app/ (It worked now, not during the demo)
 
 ## 2. Design Goals & Principles
 
