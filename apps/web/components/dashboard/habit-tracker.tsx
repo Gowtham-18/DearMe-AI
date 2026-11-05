@@ -16,7 +16,7 @@ export default function HabitTracker({ days }: HabitTrackerProps) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Weekly Habit Tracker</CardTitle>
-        <p className="text-sm text-muted-foreground">Days you showed up this week</p>
+        <p className="text-sm text-muted-foreground">Days you journaled in the last 7 days</p>
       </CardHeader>
       <CardContent className="grid grid-cols-7 gap-2">
         {days.map((day) => (

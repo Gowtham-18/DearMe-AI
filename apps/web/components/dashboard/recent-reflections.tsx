@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { MoreHorizontal } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { EntryRecord } from "@/lib/db/entries";
@@ -43,19 +42,15 @@ export default function RecentReflections({ entries }: RecentReflectionsProps) {
       </div>
       <div className="flex gap-4 overflow-x-auto pb-2">
         {entries.map((item) => (
-          <Card key={item.id} className="min-w-[240px] flex-1">
-            <CardHeader className="flex flex-row items-start justify-between pb-2">
-              <div>
+          <Link key={item.id} href={`/memories/${item.id}`} className="min-w-[240px] flex-1">
+            <Card className="h-full transition hover:border-foreground/20">
+              <CardHeader className="pb-2">
                 <CardTitle className="text-sm">{formatDisplayDate(item.entry_date)}</CardTitle>
                 <p className="text-xs text-muted-foreground">{item.mood ?? "No mood"}</p>
-              </div>
-              <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              {item.content.slice(0, 90)}
-              {item.content.length > 90 ? "..." : ""}
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent className="line-clamp-3 text-sm text-muted-foreground">{item.content}</CardContent>
+            </Card>
+          </Link>
         ))}
       </div>
     </section>

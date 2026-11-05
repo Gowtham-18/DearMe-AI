@@ -22,6 +22,7 @@ export interface ThemeCardItem {
   precededBy?: string[];
   trend?: "up" | "down" | "flat";
   trendValue?: number;
+  trendLabel?: string;
   evidenceCards?: Array<{ entry_id: string; snippet: string; reason: string }>;
 }
 
@@ -63,9 +64,10 @@ export default function ThemeCards({ themes }: ThemeCardsProps) {
                     {theme.trend === "up" && <ArrowUpRight className="h-3.5 w-3.5 text-emerald-500" />}
                     {theme.trend === "down" && <ArrowDownRight className="h-3.5 w-3.5 text-rose-500" />}
                     {theme.trend === "flat" && <Minus className="h-3.5 w-3.5 text-muted-foreground" />}
-                    {typeof theme.trendValue === "number"
-                      ? `${theme.trendValue > 0 ? "+" : ""}${theme.trendValue}%`
-                      : `${Math.round(theme.strength * 100)}%`}
+                    {theme.trendLabel ??
+                      (typeof theme.trendValue === "number"
+                        ? `${theme.trendValue > 0 ? "+" : ""}${theme.trendValue}% vs last week`
+                        : `${Math.round(theme.strength * 100)}%`)}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">

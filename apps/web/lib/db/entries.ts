@@ -22,6 +22,21 @@ export interface EntryCreateInput {
   session_id?: string | null;
 }
 
+/** One entry by id (RLS limits this to the signed-in user's own entries). */
+export async function getEntry(id: string): Promise<DbResult<EntryRecord>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase.from("entries").select("*").eq("id", id).maybeSingle();
+    if (error) {
+      return { data: null, error: error.message };
+    }
+    return { data: data ?? null, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load entry.";
+    return { data: null, error: message };
+  }
+}
+
 /** The entry saved from a given journal session (one entry per session). */
 export async function getEntryForSession(sessionId: string): Promise<DbResult<EntryRecord>> {
   try {
@@ -79,6 +94,8 @@ export async function listEntries(
       .from("entries")
       .select("*")
       .eq("user_id", userId)
+      // Newest journal day first (an entry can be written for an earlier day), then newest saved.
+      .order("entry_date", { ascending: false })
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
