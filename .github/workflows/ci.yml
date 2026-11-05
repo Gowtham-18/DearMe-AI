@@ -45,7 +45,7 @@ jobs:
           path: services/nlp/.models
           key: onnx-models-${{ hashFiles('services/nlp/app/pipeline.py') }}
           restore-keys: onnx-models-
-      - run: pip install --only-binary=:all: -r requirements.txt -r requirements-dev.txt
+      - run: "pip install --only-binary=:all: -r requirements.txt -r requirements-dev.txt"
       - run: python -m app.fetch_models
       - run: pytest -q
 
