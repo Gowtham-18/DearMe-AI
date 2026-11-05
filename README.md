@@ -155,9 +155,9 @@ NLP Capabilities
 
 | Function             | Model / Technique                  |
 | -------------------- | ---------------------------------- |
-| Embeddings           | SentenceTransformers               |
-| Sentiment            | Small Transformer + VADER fallback |
-| Keyword Extraction   | KeyBERT                            |
+| Embeddings           | all-MiniLM-L6-v2 (ONNX Runtime)    |
+| Emotion + sentiment  | DistilRoBERTa emotion (ONNX int8) + VADER |
+| Keyword Extraction   | KeyBERT-style MMR on the embeddings |
 | Fallback Keywords    | YAKE                               |
 | Clustering (small n) | KMeans                             |
 | Clustering (large n) | HDBSCAN                            |
@@ -383,8 +383,8 @@ step 2; to close them earlier, run
 ## Env Var Setup
 - Copy `apps/web/.env.example` to `apps/web/.env.local`, and `services/nlp/.env.example` to `services/nlp/.env`.
 - `NLP_INTERNAL_TOKEN` must match on web and NLP. When it is set, the NLP service rejects any POST without it.
-- Sentiment: `SENTIMENT_SOURCE=emotion` (default; derived from the emotion model), `transformer`, or `vader`.
-- Memory: `NLP_LOW_MEMORY=true` skips the emotion transformer (lexicon emotion + VADER) for small instances.
+- Sentiment: `SENTIMENT_SOURCE=emotion` (default; derived from the emotion model) or `vader`.
+- Memory: `NLP_LOW_MEMORY=true` skips the emotion model (lexicon emotion + VADER), saving about 100 MB.
 - Enhanced wording: `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_S`,
   `OPENAI_DAILY_LIMIT_PER_USER`, `OPENAI_DAILY_LIMIT`. It only runs for users who opt in under Settings.
 - Request limits: `MAX_TEXT_LENGTH`, `MAX_ANALYZE_CHARS`, `MAX_ENTRIES_PER_REQUEST`, `MAX_THEME_ENTRIES`.
@@ -399,15 +399,16 @@ step 2; to close them earlier, run
 
 ### NLP (Render)
 - Root directory: `services/nlp`
-- Build command (installs the CPU-only torch wheel; the default Linux wheel adds ~2 GB of CUDA libraries):
-  `pip install --upgrade pip && pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu && pip install --only-binary=:all: -r requirements.txt`
+- Build command (also downloads the pinned models, so a new instance starts in seconds):
+  `pip install --upgrade pip && pip install --only-binary=:all: -r requirements.txt && python -m app.fetch_models`
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1`
 - Health check path: `/health` (also reports which models loaded)
 - Runtime: `services/nlp/runtime.txt`
-- Env vars: `NLP_INTERNAL_TOKEN`, `CORS_ORIGINS`, `SENTIMENT_SOURCE`, `NLP_LOW_MEMORY`, `LOG_LEVEL`,
-  `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY` (and the other `OPENAI_*` settings above)
-- Memory: MiniLM + the emotion model need roughly 0.7 GB RAM (measured locally). The free instance has
-  512 MB, so use an instance with at least 1 GB, or set `NLP_LOW_MEMORY=true`.
+- Env vars: `NLP_INTERNAL_TOKEN`, `CORS_ORIGINS`, `SENTIMENT_SOURCE`, `NLP_LOW_MEMORY`, `NLP_THREADS`,
+  `MALLOC_ARENA_MAX=2`, `LOG_LEVEL`, `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY` (and the other `OPENAI_*` settings above)
+- Memory: the models run on ONNX Runtime (no torch). Measured locally: ~360 MB idle, ~430 MB peak on
+  6,000-character entries, so the free 512 MB instance fits. Inference runs one request at a time to keep
+  that peak flat. The port opens immediately and models load in the background; `/health` shows when they are ready.
 
 ## Security Notes
 - Every user is a Supabase Auth user (anonymous by default). Row Level Security limits every table to
