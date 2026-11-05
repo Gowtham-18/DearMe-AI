@@ -1,5 +1,7 @@
 ﻿# Threat Model (Baseline)
 
+> The current, detailed review is in [security-privacy-assessment.md](security-privacy-assessment.md).
+
 ## Assets
 - Private journal text
 - User profile metadata (name, age, occupation)
