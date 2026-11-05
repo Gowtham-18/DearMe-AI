@@ -18,6 +18,15 @@ export const analyzeEntryRequestSchema = z.object({
   created_at: z.string().nullable().optional(),
 });
 
+export const extractedFactSchema = z.object({
+  kind: z.enum(["person", "event"]),
+  key: z.string().min(1).max(160),
+  label: z.string().min(1).max(80),
+  detail: z.string().max(80).nullable().optional(),
+  event_date: z.string().nullable().optional(),
+  seen_on: z.string().nullable().optional(),
+});
+
 export const analyzeEntryResponseSchema = z.object({
   sentiment: sentimentResultSchema,
   keyphrases: z.array(z.string()),
@@ -25,6 +34,7 @@ export const analyzeEntryResponseSchema = z.object({
   safety: safetyResultSchema,
   emotion: z.string().nullable().optional(),
   mood_suggestion: z.string().nullable().optional(),
+  memories: z.array(extractedFactSchema).optional().default([]),
   degraded: z.array(z.string()).optional().default([]),
 });
 

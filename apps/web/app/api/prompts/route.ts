@@ -4,6 +4,7 @@ import { promptsBodySchema, promptsV1ResponseSchema } from "@dearme/shared";
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, serializeEmbedding } from "@/lib/nlp";
 import { buildFallbackPrompts } from "@/lib/prompts";
+import { loadMemories } from "@/lib/memory";
 
 export const maxDuration = 30;
 
@@ -21,7 +22,7 @@ export async function POST(req: Request) {
 
   if (await isRateLimited(supabase, "prompts", 60, 600)) return fallback();
 
-  const [{ data: recentEntries }, { data: lastEmbedding }, { data: themes }] = await Promise.all([
+  const [{ data: recentEntries }, { data: lastEmbedding }, { data: themes }, memories] = await Promise.all([
     supabase
       .from("entries")
       .select("id, content, created_at, entry_date, mood")
@@ -41,6 +42,7 @@ export async function POST(req: Request) {
       .eq("user_id", user.id)
       .order("strength", { ascending: false })
       .limit(5),
+    loadMemories(supabase, user.id),
   ]);
 
   let similarEntries: Array<{ id: string; content: string; created_at: string; mood: string | null; similarity?: number }> = [];
@@ -86,6 +88,7 @@ export async function POST(req: Request) {
         similarity: entry.similarity,
       })),
       themes: (themes ?? []).map((theme) => theme.label),
+      memories,
     },
     10000,
     promptsV1ResponseSchema

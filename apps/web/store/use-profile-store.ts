@@ -9,6 +9,7 @@ export interface Profile {
   preferences?: {
     enhanced_language_enabled?: boolean;
     enhanced_consent?: boolean;
+    memory_enabled?: boolean;
   } | null;
   createdAt: string;
 }

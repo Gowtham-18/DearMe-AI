@@ -21,6 +21,8 @@ import { listThemes, listThemeMembership } from "@/lib/db/themes";
 import { listWeeklyReflections } from "@/lib/db/weekly";
 import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
 import { deleteMyData } from "@/lib/db/cleanup";
+import { listMemories } from "@/lib/db/memories";
+import MemoryCard from "@/components/settings/memory-card";
 import CrisisResources from "@/components/crisis-resources";
 
 export default function SettingsPage() {
@@ -46,6 +48,8 @@ export default function SettingsPage() {
   );
 
   const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
+  const memoryEnabled = profile?.preferences?.memory_enabled !== false;
+  const [updatingMemory, setUpdatingMemory] = useState(false);
   const enhancedConsent = profile?.preferences?.enhanced_consent ?? false;
   const canToggleEnhanced = Boolean(profile);
   const enhancedSummary = useMemo(
@@ -56,10 +60,13 @@ export default function SettingsPage() {
     [enhancedEnabled]
   );
 
-  const persistPreferences = async (nextPreferences: {
-    enhanced_language_enabled: boolean;
-    enhanced_consent: boolean;
+  // Preferences are one JSON object: merge, so changing one switch never resets another.
+  const persistPreferences = async (changes: {
+    enhanced_language_enabled?: boolean;
+    enhanced_consent?: boolean;
+    memory_enabled?: boolean;
   }) => {
+    const nextPreferences = { ...(profile?.preferences ?? {}), ...changes };
     setPreferences(nextPreferences);
     if (!profile) return;
 
@@ -107,6 +114,14 @@ export default function SettingsPage() {
     setUpdatingEnhanced(false);
   };
 
+  const handleMemoryToggle = async (next: boolean) => {
+    if (updatingMemory || !profile) return;
+    setPrefStatus(null);
+    setUpdatingMemory(true);
+    await persistPreferences({ memory_enabled: next });
+    setUpdatingMemory(false);
+  };
+
   const handleExport = async () => {
     setExporting(true);
     setStatus(null);
@@ -123,6 +138,7 @@ export default function SettingsPage() {
       const { data: weekly } = await listWeeklyReflections(userId, 12);
       const { data: sessions } = await listSessions(userId, 50);
       const { data: turns } = await listTurnsByUser(userId, 500);
+      const { data: memories } = await listMemories(userId, 500);
 
       const payload = {
         profile: profileData,
@@ -133,6 +149,7 @@ export default function SettingsPage() {
         weekly_reflections: weekly ?? [],
         journal_sessions: sessions ?? [],
         journal_turns: turns ?? [],
+        memory_facts: memories ?? [],
         exported_at: new Date().toISOString(),
       };
 
@@ -208,6 +225,13 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      <MemoryCard
+        userId={profile?.user_id ?? null}
+        enabled={memoryEnabled}
+        disabled={!profile || updatingMemory}
+        onToggle={handleMemoryToggle}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Privacy & Safety</CardTitle>
@@ -282,7 +306,8 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Delete all data?</DialogTitle>
             <DialogDescription>
-              This permanently removes your profile, journal entries, chats and insights. This cannot
+              This permanently removes your profile, journal entries, chats, insights and everything DearMe
+              remembers. This cannot
               be undone.
             </DialogDescription>
           </DialogHeader>

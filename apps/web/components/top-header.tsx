@@ -45,10 +45,12 @@ export default function TopHeader() {
         .toUpperCase()
     : "AN";
 
-  const persistPreferences = async (nextPreferences: {
+  const persistPreferences = async (changes: {
     enhanced_language_enabled: boolean;
     enhanced_consent: boolean;
   }) => {
+    // Merge so this switch never resets other preferences (like memory).
+    const nextPreferences = { ...(profile?.preferences ?? {}), ...changes };
     setPreferences(nextPreferences);
     if (!profile) return;
     const { data } = await updateProfilePreferences(profile.user_id, nextPreferences);

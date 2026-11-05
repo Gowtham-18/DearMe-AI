@@ -23,6 +23,7 @@ _Assessed 2026-11-05 against the live pilot (Vercel web app, Render NLP service,
 | Embeddings (384-dim vectors of each entry) | `journal_embeddings` (pgvector) | Used for "related past entries". Not readable as text, but derived from it |
 | Themes ("Work", "Health") | `themes`, `theme_membership` | |
 | Weekly summaries | `weekly_reflections` | |
+| Remembered facts: names + relation ("Priya, sister"), dated plans ("job interview, 20 Nov") | `memory_facts` | Owner-only RLS. Shown in Settings, where each can be forgotten or memory turned off. Removed with its source entry and by "Delete data" |
 | Profile: name, age, occupation, preferences | `profiles` | Includes the AI-replies consent flag |
 | Session token | Browser `localStorage` (`dearme-auth`) | Anonymous Supabase session |
 | Rate-limit counters, legacy-claim records | `rate_limits`, `legacy_claims` | Internal |

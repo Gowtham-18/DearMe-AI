@@ -4,6 +4,7 @@ import { chatTurnBodySchema, chatTurnV1ResponseSchema, embedResponseSchema } fro
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, EMBEDDING_DIM, serializeEmbedding } from "@/lib/nlp";
 import { CRISIS_MESSAGE, detectCrisis } from "@/lib/safety";
+import { loadMemories } from "@/lib/memory";
 
 export const maxDuration = 60;
 
@@ -26,10 +27,10 @@ export async function POST(req: Request) {
   if (await isRateLimited(supabase, "chat", 40, 600)) return tooManyRequests();
 
   // RLS guarantees these only return the signed-in user's rows.
-  const [{ data: session }, { data: profile }, { data: turns }, { data: recentEntries }] = await Promise.all([
+  const [{ data: session }, { data: profile }, { data: turns }, { data: recentEntries }, memories] = await Promise.all([
     supabase
       .from("journal_sessions")
-      .select("id, status, selected_prompt_text, mood, time_budget")
+      .select("id, status, selected_prompt_text, mood, time_budget, entry_date")
       .eq("id", sessionId)
       .maybeSingle(),
     supabase.from("profiles").select("name, preferences").eq("user_id", user.id).maybeSingle(),
@@ -45,6 +46,7 @@ export async function POST(req: Request) {
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(5),
+    loadMemories(supabase, user.id),
   ]);
 
   if (!session) {
@@ -108,6 +110,8 @@ export async function POST(req: Request) {
       })),
       retrieved_entries: retrievedEntries,
       enhanced_language: enhancedAllowed,
+      today: session.entry_date ?? null,
+      memories,
     },
     enhancedAllowed ? 25000 : 15000,
     chatTurnV1ResponseSchema

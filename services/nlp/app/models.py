@@ -15,12 +15,35 @@ class SafetyResult(BaseModel):
     reason: Optional[str] = None
 
 
+class ExtractedFact(BaseModel):
+    """A person or dated event found in one entry, ready to be remembered."""
+    kind: str  # "person" | "event"
+    key: str
+    label: str
+    detail: Optional[str] = None  # a person's relation, e.g. "sister"
+    event_date: Optional[str] = None
+    seen_on: Optional[str] = None
+
+
+class MemoryFact(BaseModel):
+    """A remembered fact as stored by the web app."""
+    id: Optional[str] = None
+    kind: str
+    label: str = Field(..., min_length=1, max_length=80)
+    detail: Optional[str] = Field(default=None, max_length=80)
+    event_date: Optional[str] = None
+    mention_count: int = 1
+    last_seen: Optional[str] = None
+    followed_up_on: Optional[str] = None
+
+
 class AnalyzeEntryRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     entry_id: str = Field(..., min_length=1)
     text: str = Field(..., min_length=1, max_length=10000)
     mood: Optional[str] = None
     created_at: Optional[str] = None
+    entry_date: Optional[str] = None  # the journal day, so "tomorrow" resolves in the person's calendar
 
 
 class AnalyzeEntryResponse(BaseModel):
@@ -30,6 +53,7 @@ class AnalyzeEntryResponse(BaseModel):
     safety: SafetyResult
     emotion: Optional[str] = None
     mood_suggestion: Optional[str] = None
+    memories: List[ExtractedFact] = Field(default_factory=list)
     degraded: List[str] = Field(default_factory=list)
 
 
@@ -177,6 +201,7 @@ class PromptsRequestV1(BaseModel):
     recent_entries: List[ContextEntry] = []
     similar_entries: List[ContextEntry] = []
     themes: List[str] = []
+    memories: List[MemoryFact] = Field(default_factory=list, max_length=40)
 
 
 class PromptsResponseV1(BaseModel):
@@ -251,6 +276,8 @@ class ChatTurnRequestV1(BaseModel):
     recent_entries: List[ContextEntry] = []
     retrieved_entries: List[ContextEntry] = []
     enhanced_language: bool = False
+    today: Optional[str] = None  # the person's local date (YYYY-MM-DD)
+    memories: List[MemoryFact] = Field(default_factory=list, max_length=40)
 
 
 class ChatTurnResponseV1(BaseModel):
