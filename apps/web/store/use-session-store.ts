@@ -1,32 +1,17 @@
 ﻿import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
-
-import { getOrCreateAnonymousUserId } from "@/lib/db/profiles";
 
 interface SessionState {
+  /** Supabase auth user id (anonymous or upgraded). Set by AppShell once sign-in completes. */
   userId: string | null;
+  setUserId: (userId: string | null) => void;
+  /** Returns the signed-in user's id. Pages render only after sign-in, so this is set. */
   ensureUserId: () => string;
   clearUserId: () => void;
 }
 
-export const useSessionStore = create<SessionState>()(
-  persist(
-    (set, get) => ({
-      userId: null,
-      ensureUserId: () => {
-        const current = get().userId;
-        if (current) {
-          return current;
-        }
-        const next = getOrCreateAnonymousUserId();
-        set({ userId: next });
-        return next;
-      },
-      clearUserId: () => set({ userId: null }),
-    }),
-    {
-      name: "dearme-session",
-      storage: createJSONStorage(() => localStorage),
-    }
-  )
-);
+export const useSessionStore = create<SessionState>()((set, get) => ({
+  userId: null,
+  setUserId: (userId) => set({ userId }),
+  ensureUserId: () => get().userId ?? "",
+  clearUserId: () => set({ userId: null }),
+}));

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
 import Sidebar from "@/components/sidebar";
@@ -10,21 +10,49 @@ import AppLoading from "@/components/app-loading";
 import { useSessionStore } from "@/store/use-session-store";
 import { useProfileStore } from "@/store/use-profile-store";
 import { getProfile, upsertProfile } from "@/lib/db/profiles";
+import { claimLegacyData, ensureSignedIn } from "@/lib/auth";
+
+type AuthState = "pending" | "ready" | "error";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { ensureUserId } = useSessionStore();
+  const { userId, setUserId } = useSessionStore();
   const { profile, status, error, setStatus, setProfile, setError } = useProfileStore();
+  const [authState, setAuthState] = useState<AuthState>("pending");
 
+  // 1) Sign in (anonymously on first visit), then move any pre-auth journals to this account.
   useEffect(() => {
-    const userId = ensureUserId();
-    let isMounted = true;
+    let alive = true;
+    fetch("/api/warm").catch(() => undefined);
+
+    (async () => {
+      try {
+        const uid = await ensureSignedIn();
+        await claimLegacyData(uid);
+        if (!alive) return;
+        setUserId(uid);
+        setAuthState("ready");
+      } catch (err) {
+        console.error(err);
+        if (alive) setAuthState("error");
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [setUserId]);
+
+  // 2) Load the profile for the signed-in user.
+  useEffect(() => {
+    if (!userId) return;
+    let alive = true;
 
     const loadProfile = async () => {
-      if (profile) {
+      if (profile && profile.user_id === userId) {
         setStatus("ready");
-        const { error } = await upsertProfile({
-          user_id: profile.user_id,
+        const { error: syncError } = await upsertProfile({
+          user_id: userId,
           name: profile.name,
           age: profile.age,
           occupation: profile.occupation ?? null,
@@ -32,42 +60,56 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           created_at: profile.createdAt,
           updated_at: new Date().toISOString(),
         });
-        if (error && isMounted) {
-          setError("We couldn't sync your profile yet.");
-        }
+        if (syncError && alive) setError("We couldn't sync your profile yet.");
         return;
       }
 
       setStatus("loading");
-      const { data, error } = await getProfile(userId);
-      if (!isMounted) return;
+      const { data, error: loadError } = await getProfile(userId);
+      if (!alive) return;
 
-      if (error) {
-        setError("We couldn't load your profile yet. You can still continue locally.");
+      if (loadError) {
+        setError("We couldn't load your profile yet. Refresh the page to try again.");
         setStatus("ready");
         return;
       }
 
-      if (data) {
-        setProfile({
-          user_id: data.user_id,
-          name: data.name,
-          age: data.age,
-          occupation: data.occupation ?? undefined,
-          preferences: data.preferences ?? {},
-          createdAt: data.created_at ?? new Date().toISOString(),
-        });
-      }
-
+      setProfile(
+        data
+          ? {
+              user_id: data.user_id,
+              name: data.name,
+              age: data.age,
+              occupation: data.occupation ?? undefined,
+              preferences: data.preferences ?? {},
+              createdAt: data.created_at ?? new Date().toISOString(),
+            }
+          : null
+      );
       setStatus("ready");
     };
 
     loadProfile();
-
     return () => {
-      isMounted = false;
+      alive = false;
     };
-  }, [ensureUserId, profile, setError, setProfile, setStatus]);
+    // A cached profile from another (legacy) id is replaced by the database copy above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  let content: React.ReactNode;
+  if (authState === "error") {
+    content = (
+      <div className="rounded-2xl border bg-card p-6 text-sm">
+        <p className="font-medium text-foreground">We couldn&apos;t start your private session.</p>
+        <p className="mt-1 text-muted-foreground">Check your connection and refresh the page.</p>
+      </div>
+    );
+  } else if (authState === "pending" || status === "loading" || status === "idle") {
+    content = <AppLoading />;
+  } else {
+    content = children;
+  }
 
   return (
     <div className="min-h-screen bg-surface">
@@ -80,16 +122,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <main className="flex-1 px-4 pb-8 md:px-8">
-            {status === "loading" ? <AppLoading /> : children}
-            {error && (
-              <div className="mt-4 rounded-2xl border bg-card p-4 text-sm text-destructive">
-                {error}
-              </div>
+            {content}
+            {error && authState === "ready" && (
+              <div className="mt-4 rounded-2xl border bg-card p-4 text-sm text-destructive">{error}</div>
             )}
           </main>
         </div>
       </div>
-      <OnboardingModal />
+      {authState === "ready" && <OnboardingModal />}
     </div>
   );
 }

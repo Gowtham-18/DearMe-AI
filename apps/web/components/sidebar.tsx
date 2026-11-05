@@ -34,8 +34,9 @@ export default function Sidebar({ activePath }: { activePath: string }) {
 
   const handleNewEntry = async () => {
     if (creating) return;
-    setCreating(true);
     const userId = ensureUserId();
+    if (!userId) return;
+    setCreating(true);
     const todayKey = formatLocalDate(new Date());
     const promptText = "What feels most important to explore right now?";
 

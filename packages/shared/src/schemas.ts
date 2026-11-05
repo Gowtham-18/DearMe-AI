@@ -23,6 +23,9 @@ export const analyzeEntryResponseSchema = z.object({
   keyphrases: z.array(z.string()),
   embedding: z.array(z.number()),
   safety: safetyResultSchema,
+  emotion: z.string().nullable().optional(),
+  mood_suggestion: z.string().nullable().optional(),
+  degraded: z.array(z.string()).optional().default([]),
 });
 
 export const recomputeThemesRequestSchema = z.object({
@@ -201,4 +204,54 @@ export const chatTurnResponseSchema = z.object({
     follow_up_question: z.string(),
   }),
   safety: safetyResultSchema,
+});
+
+// --- v1 contracts consumed by the web API routes ----------------------------------------
+
+export const embedResponseSchema = z.object({
+  embedding: z.array(z.number()),
+  degraded: z.array(z.string()).optional().default([]),
+});
+
+export const evidenceCardSchema = z.object({
+  entry_id: z.string().nullable().optional(),
+  snippet: z.string(),
+  reason: z.string(),
+});
+
+export const chatTurnV1ResponseSchema = z.object({
+  assistant_message: z.string(),
+  follow_up_question: z.string(),
+  evidence: z.array(evidenceCardSchema).optional().default([]),
+  safety: safetyResultSchema,
+  mode: z.enum(["deterministic", "enhanced"]).catch("deterministic"),
+});
+
+export const promptsV1ResponseSchema = z.object({
+  prompts: generatePromptsResponseSchema.shape.prompts,
+  safety: safetyResultSchema,
+});
+
+// --- request bodies accepted by the web API routes (user id always comes from auth) ------
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+
+export const promptsBodySchema = z.object({
+  mood: z.string().max(30).nullable().optional(),
+  timeBudget: z.union([z.literal(3), z.literal(5), z.literal(7), z.literal(10)]).optional(),
+});
+
+export const chatTurnBodySchema = z.object({
+  sessionId: z.string().uuid(),
+  latestUserMessage: z.string().trim().min(1).max(4000),
+});
+
+export const analyzeBodySchema = z.object({
+  entryId: z.string().uuid(),
+});
+
+export const weeklyBodySchema = z.object({
+  weekStart: isoDate,
+  weekEnd: isoDate,
+  force: z.boolean().optional(),
 });

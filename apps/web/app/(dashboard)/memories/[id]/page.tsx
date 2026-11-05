@@ -10,6 +10,7 @@ import { useSessionStore } from "@/store/use-session-store";
 import { listEntries, type EntryRecord } from "@/lib/db/entries";
 import { getEntryAnalysis, type EntryAnalysisRecord } from "@/lib/db/analysis";
 import { formatDisplayDate } from "@/lib/date";
+import { apiFetch } from "@/lib/auth";
 
 interface MemoryDetailPageProps {
   params: { id: string };
@@ -62,11 +63,7 @@ export default function MemoryDetailPage({ params }: MemoryDetailPageProps) {
   const handleRetryAnalysis = async () => {
     setAnalysisStatus(null);
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entryId: entry.id }),
-      });
+      const response = await apiFetch("/api/analyze", { entryId: entry.id });
       if (!response.ok) {
         setAnalysisStatus("We couldn't refresh insights yet.");
         return;

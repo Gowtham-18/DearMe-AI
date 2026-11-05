@@ -13,6 +13,8 @@ import { formatLocalDate } from "@/lib/date";
 import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
 import { createSession, createTurn } from "@/lib/db/sessions";
+import { apiFetch } from "@/lib/auth";
+import CrisisResources from "@/components/crisis-resources";
 
 const defaultTimeBudget = 5;
 
@@ -49,7 +51,7 @@ export default function JournalForm() {
   const [error, setError] = useState<string | null>(null);
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(true);
-  const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
+  const [crisis, setCrisis] = useState(false);
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
   const emptyCopy = useMemo(
@@ -59,26 +61,19 @@ export default function JournalForm() {
 
   useEffect(() => {
     const loadPrompts = async () => {
-      const userId = ensureUserId();
       setPromptsLoading(true);
-      setSafetyNotice(null);
 
       try {
-        const response = await fetch("/api/prompts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, mood, timeBudget }),
-        });
+        const response = await apiFetch("/api/prompts", { mood, timeBudget });
         if (response.ok) {
           const data = (await response.json()) as {
             prompts?: PromptItem[];
             safety?: { crisis?: boolean; reason?: string | null };
           };
           if (data.safety?.crisis) {
-            setSafetyNotice(
-              "If you're feeling overwhelmed, consider reaching out to someone you trust."
-            );
-            setPrompts([]);
+            // Show support resources, but never lock someone out of writing.
+            setCrisis(true);
+            setPrompts(buildFallbackPrompts(mood, timeBudget));
           } else if (data.prompts && data.prompts.length > 0) {
             setPrompts(data.prompts);
           } else {
@@ -96,7 +91,7 @@ export default function JournalForm() {
 
     const timer = setTimeout(loadPrompts, 280);
     return () => clearTimeout(timer);
-  }, [ensureUserId, mood, timeBudget]);
+  }, [mood, timeBudget]);
 
   const startSession = async (prompt: PromptItem) => {
     setStarting(true);
@@ -110,6 +105,8 @@ export default function JournalForm() {
       selected_prompt_text: prompt.text,
       status: "ACTIVE",
       title: prompt.text.slice(0, 60),
+      mood,
+      time_budget: timeBudget,
     });
 
     if (sessionError || !data) {
@@ -131,7 +128,6 @@ export default function JournalForm() {
   };
 
   const handlePromptSelect = async (prompt: PromptItem) => {
-    if (safetyNotice) return;
     await startSession(prompt);
   };
 
@@ -193,9 +189,12 @@ export default function JournalForm() {
           </div>
           <Sparkles className="h-4 w-4 text-muted-foreground" />
         </div>
-        {safetyNotice ? (
-          <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
-        ) : promptsLoading ? (
+        {crisis && (
+          <div className="mt-3">
+            <CrisisResources />
+          </div>
+        )}
+        {promptsLoading ? (
           <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
         ) : (
           <div className="mt-4 space-y-3">

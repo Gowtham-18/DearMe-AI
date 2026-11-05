@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useSessionStore } from "@/store/use-session-store";
+import { apiFetch } from "@/lib/auth";
 import { getWeekRange, formatDisplayDate } from "@/lib/date";
 
 type WeeklyReflection = {
@@ -14,7 +14,6 @@ type WeeklyReflection = {
 };
 
 export default function WeeklyPage() {
-  const { ensureUserId } = useSessionStore();
   const [reflection, setReflection] = useState<WeeklyReflection | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,13 +22,8 @@ export default function WeeklyPage() {
 
   useEffect(() => {
     const loadWeekly = async () => {
-      const userId = ensureUserId();
       try {
-        const response = await fetch("/api/weekly-reflection", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, weekStart: range.start, weekEnd: range.end }),
-        });
+        const response = await apiFetch("/api/weekly-reflection", { weekStart: range.start, weekEnd: range.end });
 
         if (!response.ok) {
           setError("We couldn't load your weekly reflection yet.");
@@ -47,7 +41,7 @@ export default function WeeklyPage() {
     };
 
     loadWeekly();
-  }, [ensureUserId, range.end, range.start]);
+  }, [range.end, range.start]);
 
   return (
     <div className="space-y-6">

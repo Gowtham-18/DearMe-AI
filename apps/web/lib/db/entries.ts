@@ -1,4 +1,4 @@
-﻿import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbListResult, DbResult } from "@/lib/db/types";
 
 export interface EntryRecord {
@@ -8,6 +8,7 @@ export interface EntryRecord {
   mood: string | null;
   time_budget: number;
   content: string;
+  session_id?: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -18,6 +19,27 @@ export interface EntryCreateInput {
   mood: string | null;
   time_budget: number;
   content: string;
+  session_id?: string | null;
+}
+
+/** The entry saved from a given journal session (one entry per session). */
+export async function getEntryForSession(sessionId: string): Promise<DbResult<EntryRecord>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from("entries")
+      .select("*")
+      .eq("session_id", sessionId)
+      .maybeSingle();
+
+    if (error) {
+      return { data: null, error: error.message };
+    }
+    return { data: data ?? null, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load entry.";
+    return { data: null, error: message };
+  }
 }
 
 export async function getEntryForDate(

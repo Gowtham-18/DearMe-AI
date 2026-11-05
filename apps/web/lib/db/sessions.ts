@@ -8,6 +8,8 @@ export interface JournalSessionRecord {
   selected_prompt_id: string;
   selected_prompt_text: string;
   title?: string | null;
+  mood?: string | null;
+  time_budget?: number | null;
   status: "ACTIVE" | "COMPLETED";
   completed_at: string | null;
   created_at: string | null;
@@ -57,7 +59,7 @@ export async function createSession(
     | "selected_prompt_text"
     | "status"
   >
-    & { title?: string | null }
+    & { title?: string | null; mood?: string | null; time_budget?: number | null }
 ): Promise<DbResult<JournalSessionRecord>> {
   try {
     const supabase = getSupabaseBrowserClient();
@@ -72,8 +74,9 @@ export async function createSession(
       .select("*")
       .maybeSingle();
 
-    if (error && error.message.includes('column "title"')) {
-      const { title: _title, ...withoutTitle } = insertPayload as Record<string, unknown>;
+    if (error && /column "(title|mood|time_budget)"|'(title|mood|time_budget)' column/.test(error.message)) {
+      // Older schema (before phase 5/6a): retry without the optional columns.
+      const { title: _title, mood: _mood, time_budget: _time, ...withoutTitle } = insertPayload as Record<string, unknown>;
       const retry = await supabase
         .from("journal_sessions")
         .insert(withoutTitle)
@@ -95,8 +98,7 @@ export async function createSession(
       if (message.includes("row-level security") || message.includes("permission denied")) {
         return {
           data: null,
-          error:
-            "Supabase Row Level Security is enabled. Disable RLS for journal_sessions in this demo setup.",
+          error: "Your session has ended. Refresh the page to continue.",
         };
       }
       if (message.includes('column "title"')) {

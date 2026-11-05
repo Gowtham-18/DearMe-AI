@@ -1,179 +1,128 @@
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { analyzeBodySchema, analyzeEntryResponseSchema, recomputeThemesResponseSchema } from "@dearme/shared";
 
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
+import { callNlp, EMBEDDING_DIM, parseEmbedding, serializeEmbedding } from "@/lib/nlp";
 import { moodToNumeric } from "@/lib/moods";
 
-const getNlpUrl = () =>
-  process.env.NLP_SERVICE_URL ||
-  process.env.NEXT_PUBLIC_NLP_URL ||
-  "http://localhost:8000";
+export const maxDuration = 60;
 
-const serializeEmbedding = (embedding: number[]) => `[${embedding.join(",")}]`;
-
-const parseEmbedding = (value: unknown): number[] => {
-  if (Array.isArray(value)) {
-    return value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
-  }
-  if (typeof value === "string") {
-    const cleaned = value.replace(/[\[\]\(\)]/g, "");
-    return cleaned
-      .split(",")
-      .map((item) => Number(item.trim()))
-      .filter((item) => Number.isFinite(item));
-  }
-  return [];
-};
+const MIN_ENTRIES_FOR_THEMES = 4;
 
 export async function POST(req: Request) {
-  try {
-    const { entryId } = (await req.json()) as { entryId?: string };
-    if (!entryId) {
-      return NextResponse.json({ error: "Missing entryId." }, { status: 400 });
-    }
+  const ctx = await getRequestContext(req);
+  if (ctx instanceof NextResponse) return ctx;
+  const { supabase, user } = ctx;
 
-    const supabase = getSupabaseServerClient();
-    const { data: entry, error: entryError } = await supabase
-      .from("entries")
-      .select("*")
-      .eq("id", entryId)
-      .maybeSingle();
+  const parsed = analyzeBodySchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Missing entry." }, { status: 400 });
+  }
 
-    if (entryError || !entry) {
-      return NextResponse.json({ error: "Entry not found." }, { status: 404 });
-    }
+  if (await isRateLimited(supabase, "analyze", 30, 3600)) return tooManyRequests();
 
-    const nlpResponse = await fetch(`${getNlpUrl()}/analyze-entry`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: entry.user_id,
-        entry_id: entry.id,
-        text: entry.content,
-        mood: entry.mood,
-        created_at: entry.created_at,
-      }),
-    });
+  const { data: entry } = await supabase
+    .from("entries")
+    .select("id, user_id, content, mood, created_at")
+    .eq("id", parsed.data.entryId)
+    .maybeSingle();
+  if (!entry) {
+    return NextResponse.json({ error: "Entry not found." }, { status: 404 });
+  }
 
-    if (!nlpResponse.ok) {
-      return NextResponse.json({ error: "NLP analysis failed." }, { status: 502 });
-    }
+  const result = await callNlp(
+    "/analyze-entry",
+    { user_id: user.id, entry_id: entry.id, text: entry.content, mood: entry.mood, created_at: entry.created_at },
+    20000,
+    analyzeEntryResponseSchema
+  );
+  if (!result.ok) {
+    return NextResponse.json({ error: "Insights are unavailable right now." }, { status: 502 });
+  }
+  const analysis = result.data;
+  const warnings: string[] = [];
 
-    const analysis = (await nlpResponse.json()) as {
-      sentiment: { label: string; score: number };
-      keyphrases: string[];
-      embedding: number[];
-      safety: { crisis: boolean; reason?: string | null };
-      emotion?: string | null;
-      mood_suggestion?: string | null;
-    };
+  const mood = entry.mood ?? analysis.mood_suggestion ?? null;
+  if (!entry.mood && analysis.mood_suggestion) {
+    await supabase.from("entries").update({ mood: analysis.mood_suggestion }).eq("id", entry.id);
+  }
 
-    if (!entry.mood && analysis.mood_suggestion) {
-      await supabase
-        .from("entries")
-        .update({ mood: analysis.mood_suggestion })
-        .eq("id", entry.id);
-    }
+  const { error: analysisError } = await supabase.from("entry_analysis").upsert({
+    entry_id: entry.id,
+    user_id: user.id,
+    sentiment_label: analysis.sentiment.label,
+    sentiment_score: analysis.sentiment.score,
+    mood_numeric: moodToNumeric(mood),
+    keyphrases: analysis.keyphrases,
+    safety_flags: analysis.safety,
+  });
+  if (analysisError) {
+    return NextResponse.json({ error: "Failed to store insights." }, { status: 500 });
+  }
 
-    const keyphrases = Array.isArray(analysis.keyphrases) ? analysis.keyphrases : [];
-    const { error: analysisError } = await supabase.from("entry_analysis").upsert({
-      entry_id: entry.id,
-      user_id: entry.user_id,
-      sentiment_label: analysis.sentiment.label,
-      sentiment_score: analysis.sentiment.score,
-      mood_numeric: moodToNumeric(entry.mood ?? analysis.mood_suggestion ?? null),
-      keyphrases,
-      safety_flags: analysis.safety ?? {},
-    });
-
-    if (analysisError) {
-      return NextResponse.json({ error: "Failed to store analysis." }, { status: 500 });
-    }
-
+  // Only store real embeddings: a placeholder vector would corrupt recall and themes.
+  if (analysis.embedding.length === EMBEDDING_DIM) {
     await supabase.from("journal_embeddings").delete().eq("entry_id", entry.id);
-    const { error: embeddingError } = await supabase.from("journal_embeddings").insert({
-      user_id: entry.user_id,
-      entry_id: entry.id,
-      embedding: serializeEmbedding(analysis.embedding),
-    });
-
-    const { data: embeddingRows } = await supabase
+    const { error } = await supabase
       .from("journal_embeddings")
-      .select("entry_id, embedding")
-      .eq("user_id", entry.user_id)
-      .order("created_at", { ascending: false })
-      .limit(200);
+      .insert({ user_id: user.id, entry_id: entry.id, embedding: serializeEmbedding(analysis.embedding) });
+    if (error) warnings.push("embedding_not_stored");
+    else await refreshThemes(supabase, user.id, warnings);
+  } else {
+    warnings.push("embedding_unavailable");
+  }
 
-    const entryIds = (embeddingRows ?? []).map((row) => row.entry_id);
-    const { data: entryRows } = await supabase
-      .from("entries")
-      .select("id, content")
-      .in("id", entryIds);
+  return NextResponse.json({ status: "ok", degraded: analysis.degraded, warnings });
+}
 
-    const entryMap = new Map(entryRows?.map((row) => [row.id, row.content]) ?? []);
-    const recomputeEntries = (embeddingRows ?? [])
-      .map((row) => ({
-        entry_id: row.entry_id,
-        text: entryMap.get(row.entry_id) ?? "",
-        embedding: parseEmbedding(row.embedding),
-      }))
-      .filter((item) => item.text && item.embedding.length > 0);
+async function refreshThemes(supabase: SupabaseClient, userId: string, warnings: string[]) {
+  const { data: embeddingRows } = await supabase
+    .from("journal_embeddings")
+    .select("entry_id, embedding")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (!embeddingRows || embeddingRows.length < MIN_ENTRIES_FOR_THEMES) return;
 
-    if (!embeddingError && recomputeEntries.length >= 2) {
-      const themeResponse = await fetch(`${getNlpUrl()}/recompute-themes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: entry.user_id,
-          entries: recomputeEntries,
-        }),
-      });
+  const entryIds = embeddingRows.map((row) => row.entry_id);
+  const [{ data: entryRows }, { data: analysisRows }] = await Promise.all([
+    supabase.from("entries").select("id, content").in("id", entryIds),
+    supabase.from("entry_analysis").select("entry_id, keyphrases").in("entry_id", entryIds),
+  ]);
+  const textById = new Map((entryRows ?? []).map((row) => [row.id, row.content as string]));
+  const phrasesById = new Map(
+    (analysisRows ?? []).map((row) => [row.entry_id, Array.isArray(row.keyphrases) ? (row.keyphrases as string[]) : []])
+  );
 
-      if (themeResponse.ok) {
-        const themePayload = (await themeResponse.json()) as {
-          themes: Array<{
-            temp_theme_id: string;
-            label: string;
-            keywords: string[];
-            strength: number;
-            members: Array<{ entry_id: string; score: number }>;
-          }>;
-        };
+  const entries = embeddingRows
+    .map((row) => ({
+      entry_id: row.entry_id,
+      text: (textById.get(row.entry_id) ?? "").slice(0, 1000),
+      embedding: parseEmbedding(row.embedding),
+      keyphrases: phrasesById.get(row.entry_id) ?? [],
+    }))
+    .filter((item) => item.text && item.embedding.length === EMBEDDING_DIM);
+  if (entries.length < MIN_ENTRIES_FOR_THEMES) return;
 
-        await supabase.from("theme_membership").delete().eq("user_id", entry.user_id);
-        await supabase.from("themes").delete().eq("user_id", entry.user_id);
+  const result = await callNlp("/recompute-themes", { user_id: userId, entries }, 25000, recomputeThemesResponseSchema);
+  if (!result.ok) {
+    warnings.push("themes_not_updated");
+    return;
+  }
 
-        const themeRows = themePayload.themes.map((theme) => ({
-          id: theme.temp_theme_id,
-          user_id: entry.user_id,
-          label: theme.label,
-          keywords: theme.keywords ?? [],
-          strength: theme.strength ?? 0,
-        }));
+  const themes = result.data.themes.map((theme) => ({
+    id: theme.temp_theme_id,
+    label: theme.label,
+    keywords: theme.keywords,
+    strength: theme.strength,
+    members: theme.members.map((member) => ({ entry_id: member.entry_id, score: member.score })),
+  }));
 
-        if (themeRows.length > 0) {
-          await supabase.from("themes").insert(themeRows);
-        }
-
-        const membershipRows = themePayload.themes.flatMap((theme) =>
-          theme.members.map((member) => ({
-            user_id: entry.user_id,
-            theme_id: theme.temp_theme_id,
-            entry_id: member.entry_id,
-            score: member.score ?? 0,
-          }))
-        );
-
-        if (membershipRows.length > 0) {
-          await supabase.from("theme_membership").insert(membershipRows);
-        }
-      }
-    }
-
-    return NextResponse.json({
-      status: "ok",
-      warning: embeddingError ? "Embedding storage failed. Sentiment still saved." : null,
-    });
-  } catch (err) {
-    return NextResponse.json({ error: "Unexpected error." }, { status: 500 });
+  // One transaction: a failure keeps the previous themes instead of leaving none.
+  const { error } = await supabase.rpc("replace_user_themes", { p_themes: themes });
+  if (error) {
+    console.warn(`replace_user_themes failed (${error.code ?? "unknown"})`);
+    warnings.push("themes_not_updated");
   }
 }

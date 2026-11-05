@@ -1,4 +1,4 @@
-﻿import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbResult } from "@/lib/db/types";
 
 export interface ProfileRecord {
@@ -14,27 +14,6 @@ export interface ProfileRecord {
 export interface ProfilePreferences {
   enhanced_language_enabled?: boolean;
   enhanced_consent?: boolean;
-}
-
-const USER_ID_KEY = "dearme-user-id";
-
-export function getOrCreateAnonymousUserId(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-
-  const existing = window.localStorage.getItem(USER_ID_KEY);
-  if (existing) {
-    return existing;
-  }
-
-  const generated =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `anon_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-  window.localStorage.setItem(USER_ID_KEY, generated);
-  return generated;
 }
 
 export async function getProfile(userId: string): Promise<DbResult<ProfileRecord>> {
