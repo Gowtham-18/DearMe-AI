@@ -16,8 +16,28 @@ from .models import (
     ReflectionPlan,
     RenderedMessage,
 )
-from .openai_rewriter import generate_journal_cues
 from .pipeline import analyze_affect, extract_keyphrases
+from .responder import (
+    EMOTION_ACKS,
+    FEELING_ACKS,
+    NEUTRAL_ACKS,
+    POSITIVE_FEELINGS,
+    AREA_TOPICS,
+    LIFE_AREAS,
+    REFLECTION_LEADS,
+    area_label_to_topic,
+    detect_area,
+    area_stage,
+    asks_for_advice,
+    conversation_area,
+    coverage,
+    first_unasked,
+    is_brief,
+    pick,
+    question_candidates,
+    reflect_clause,
+    wrap_up_due,
+)
 from .safety import CRISIS_RESOURCES
 
 PROMPT_PACKS = {
@@ -130,35 +150,6 @@ _NEGATIVE_SAFETY_REPLY_RE = re.compile(
     r"^(no|nope|nah|not really|not sure|i'm not|im not|i am not|idk|i don't know|i dont know|maybe not)\b"
 )
 
-EMOTION_ADJECTIVE = {
-    "sadness": "sad",
-    "fear": "anxious",
-    "anger": "frustrated",
-    "joy": "happy",
-    "surprise": "surprised",
-    "disgust": "upset",
-}
-EMOTION_VALIDATION = {
-    "sadness": "heavy",
-    "fear": "unsettling",
-    "anger": "frustrating",
-    "joy": "uplifting",
-    "surprise": "unexpected",
-    "disgust": "upsetting",
-}
-FEELING_VALIDATION = {
-    "anxious": "unsettling",
-    "stressed": "like a lot to carry",
-    "sad": "heavy",
-    "tired": "draining",
-    "angry": "frustrating",
-    "lonely": "isolating",
-    "hopeful": "encouraging",
-    "calm": "steadying",
-    "grateful": "meaningful",
-    "happy": "uplifting",
-    "focused": "grounding",
-}
 FOLLOW_UPS: Dict[str, Tuple[str, ...]] = {
     "anxious": (
         "Is there something specific that's making you feel on edge?",
@@ -190,13 +181,6 @@ FOLLOW_UPS: Dict[str, Tuple[str, ...]] = {
     "happy": ("What made that moment feel good?", "What do you want to remember about it?"),
     "focused": ("What made it easier to stay focused?", "What helped you get into that rhythm?"),
 }
-GENERIC_FOLLOW_UPS = (
-    "What feels most important to explore next?",
-    "What else is sitting with you about this?",
-    "What did you need most in that moment?",
-)
-
-
 def _infer_feeling(text: str) -> Optional[str]:
     lowered = _norm(text)
     best: Optional[Tuple[int, int, str]] = None
@@ -281,6 +265,11 @@ _NON_TOPIC_WORDS = {
 }
 
 
+def determined_nouns(text: str) -> List[str]:
+    """Nouns the person introduced with a determiner ("my dog", "the park"), in order."""
+    return [m.group(2) for m in _DETERMINER_NOUN_RE.finditer(_norm(text)) if _usable_topic_word(m.group(2))]
+
+
 def _usable_topic_word(word: str) -> bool:
     return (
         word not in _FEELING_WORDS
@@ -312,20 +301,6 @@ def _similar_entries(entries: Sequence[ContextEntry], threshold: float = 0.5, co
     ranked = [entry for entry in entries if entry.similarity is not None and entry.similarity >= threshold]
     ranked.sort(key=lambda entry: entry.similarity or 0.0, reverse=True)
     return ranked[:count]
-
-
-def _choose_follow_up(feeling: Optional[str], topic: Optional[str], history: Sequence[ChatMessage]) -> str:
-    recent_assistant = " ".join(
-        _norm(message.content) for message in list(history)[-6:] if message.role == "assistant"
-    )
-    options: List[str] = list(FOLLOW_UPS.get(feeling or "", ()))
-    if topic:
-        options.append(f"What feels most important to name about {topic}?")
-    options.extend(GENERIC_FOLLOW_UPS)
-    for option in options:
-        if _norm(option) not in recent_assistant:
-            return option
-    return options[0]
 
 
 def _plan(
@@ -418,6 +393,22 @@ def _starter_prompts(mood: Optional[str], time_budget: int) -> List[PromptItem]:
     ]
 
 
+_TOPIC_AREA = {topic: key for key, topic in AREA_TOPICS.items()}
+
+
+def _entry_area_topic(text: str) -> Optional[str]:
+    area = detect_area(text)
+    return AREA_TOPICS[area.key] if area else None
+
+
+def _entries_about(entries: Sequence[ContextEntry], topic: str, count: int = 2) -> List[ContextEntry]:
+    key = _TOPIC_AREA.get(topic)
+    if key is None:
+        return _entries_mentioning(entries, topic, count)
+    area = next(area for area in LIFE_AREAS if area.key == key)
+    return [entry for entry in entries if area.pattern.search(_norm(entry.text))][:count]
+
+
 def build_prompts(
     user_id: str,
     recent_entries: List[ContextEntry],
@@ -432,16 +423,17 @@ def build_prompts(
     if not combined_entries:
         return _starter_prompts(mood, time_budget)
 
-    recent_focus: List[str] = []
-    for entry in recent_entries[:3]:
-        recent_focus.extend(extract_keyphrases(entry.text, top_n=2))
-
-    similar_focus: List[str] = []
-    for entry in similar_entries[:3]:
-        similar_focus.extend(extract_keyphrases(entry.text, top_n=1))
-
-    topics = list(dict.fromkeys([theme.lower() for theme in themes] + recent_focus + similar_focus))[:6]
-    if not topics:
+    # Topics are life areas ("work", "your health"): they read naturally in every template.
+    theme_topics = [area_label_to_topic(theme) for theme in themes if theme]
+    entry_topics = [_entry_area_topic(entry.text) for entry in recent_entries[:3] + similar_entries[:3]]
+    topics = list(dict.fromkeys([t for t in theme_topics + entry_topics if t in _TOPIC_AREA]))[:6]
+    # A recent entry outside those areas still gets a personal prompt about what the person named.
+    moment = next(
+        ((entry, nouns[0]) for entry in recent_entries[:3] if not detect_area(entry.text)
+         for nouns in [determined_nouns(entry.text)] if nouns),
+        None,
+    )
+    if not topics and not moment:
         return _starter_prompts(mood, time_budget)
 
     mood_hint = f"feeling {mood.lower()}" if mood else "right now"
@@ -477,7 +469,7 @@ def build_prompts(
             break
         template = templates[index % len(templates)]
         text = template.format(topic=topic, minutes=time_budget, mood_hint=mood_hint)
-        evidence_entries = _entries_mentioning(combined_entries, topic, 2)
+        evidence_entries = _entries_about(combined_entries, topic, 2)
         prompts.append(
             PromptItem(
                 id=f"prompt_{index + 1}",
@@ -487,6 +479,18 @@ def build_prompts(
                     PromptEvidence(entry_id=entry.entry_id, snippet=_snippet(entry.text), reason="Mentioned in a recent entry.")
                     for entry in evidence_entries
                 ],
+            )
+        )
+
+    if moment and len(prompts) < 4:
+        entry, noun = moment
+        phrase = f"your {noun}" if re.search(rf"\bmy\s+{re.escape(noun)}\b", _norm(entry.text)) else f"the {noun}"
+        prompts.append(
+            PromptItem(
+                id="prompt_moment",
+                text=f"You wrote about {phrase} recently. What's stayed with you since then?",
+                reason="From a recent entry.",
+                evidence=[PromptEvidence(entry_id=entry.entry_id, snippet=_snippet(entry.text), reason="Your recent entry.")],
             )
         )
 
@@ -515,7 +519,7 @@ def build_reflection_plan(
             safety = {"crisis": True, "reason": "Negative answer to a safety check-in."}
         return _crisis_plan(safety)
 
-    name_prefix = f"{user_name}, " if user_name else ""
+    name_prefix = f"{user_name.split()[0]}, " if (user_name or "").strip() else ""
 
     if _contains_abuse(latest_user_message):
         return _plan(
@@ -539,8 +543,10 @@ def build_reflection_plan(
 
     short_plan = _short_reply_plan(latest_user_message, safety)
     if short_plan:
-        if user_name:
-            short_plan.validation.text = f"{user_name}, {short_plan.validation.text[0].lower()}{short_plan.validation.text[1:]}"
+        short_plan.reflection.text = short_plan.pattern_connection.text = short_plan.gentle_nudge.text = ""
+        if (user_name or "").strip() and not any(m.role == "assistant" for m in history):
+            text = short_plan.validation.text
+            short_plan.validation.text = f"{user_name.split()[0]}, {text if text.startswith('I') else text[0].lower() + text[1:]}"
         return short_plan
 
     recent_user_text = [m.content for m in history if m.role == "user" and m.content.strip()]
@@ -552,39 +558,78 @@ def build_reflection_plan(
     keyphrases = extract_keyphrases(latest_user_message, top_n=6) or extract_keyphrases(context_text, top_n=6)
     topic = _pick_topic(keyphrases, latest_user_message)
 
-    feeling = _infer_feeling(latest_user_message) or _infer_feeling(context_text)
-    if not feeling and affect.emotion in EMOTION_ADJECTIVE and affect.emotion_confidence >= 0.5:
-        feeling = EMOTION_ADJECTIVE[affect.emotion]
+    # Only claim a feeling the person named. The emotion model is used for longer messages only,
+    # and never turned into "you're feeling X": two words like "my health" carry no feeling.
+    explicit_feeling = _infer_feeling(latest_user_message)
+    feeling = explicit_feeling or _infer_feeling(context_text)
+    long_message = len(latest_user_message.split()) >= 8
+    model_confident = long_message and affect.emotion_confidence >= 0.7
     if topic and feeling and feeling in topic:
         topic = None
     shown = _topic_phrase(topic, latest_user_message) if topic else None
 
+    prior_user = [m.content for m in history if m.role == "user" and m.content.strip()]
+    if prior_user and prior_user[-1].strip() == latest_user_message.strip():
+        prior_user = prior_user[:-1]
+    prior_assistant = [m.content for m in history if m.role == "assistant" and m.content.strip()]
+    # The session opens with the chosen prompt as an assistant turn; that isn't a reply yet.
+    prior_replies = [t for t in prior_assistant if _norm(t) != _norm(selected_prompt or "")]
+
+    area = conversation_area(latest_user_message, prior_user)
+    stage = area_stage(prior_user, area, latest_user_message)
+    advice = asks_for_advice(latest_user_message)
+    positive = (explicit_feeling in POSITIVE_FEELINGS) or (
+        not explicit_feeling and model_confident and affect.emotion == "joy"
+    )
+
+    # 1) Acknowledge: specific to what they named, never a stock "thanks for sharing".
     if _contains_profanity(latest_user_message):
-        validation = f"{name_prefix}That sounds really intense."
+        ack = "That sounds really intense."
+    elif advice:
+        ack = "I can't tell you what's right for you, but we can think it through together."
+    elif explicit_feeling:
+        ack = FEELING_ACKS.get(explicit_feeling, "")
+    elif area and (is_brief(latest_user_message) or stage == 0):
+        ack = pick(area.ack, latest_user_message)
+    elif model_confident and affect.emotion in EMOTION_ACKS and not prior_assistant:
+        ack = EMOTION_ACKS[affect.emotion]
     else:
-        phrase = FEELING_VALIDATION.get(feeling or "")
-        if not phrase and affect.emotion_confidence >= 0.5:
-            phrase = EMOTION_VALIDATION.get(affect.emotion)
-        validation = f"{name_prefix}Thanks for sharing that." + (f" That sounds {phrase}." if phrase else "")
+        ack = ""
+    said_before = " ".join(_norm(t) for t in prior_assistant)
+    if ack and _norm(ack) in said_before:
+        ack = ""
+    first_name = (user_name or "").split()[0] if (user_name or "").strip() else ""
+    if first_name and not prior_replies:
+        if not ack:
+            ack = pick(NEUTRAL_ACKS, latest_user_message)
+        keep_case = ack.startswith(("I ", "I'm", "I'"))
+        ack = f"{first_name}, {ack if keep_case else ack[0].lower() + ack[1:]}"
 
-    short_message = len(latest_user_message.split()) <= 6
-    snippet = _snippet(latest_user_message, 90).rstrip(".!?")
-    if feeling and topic:
-        core = f"It sounds like you're feeling {feeling} about {shown}."
-    elif feeling:
-        core = f"It sounds like you're feeling {feeling}."
-    elif topic:
-        core = f"It sounds like {shown} is on your mind."
-    else:
-        core = "It sounds like something important is on your mind."
-    reflection = core if short_message else f'You wrote, "{snippet}." {core}'
-    if mood and (not feeling or mood.lower() != feeling):
-        reflection += f" You came in feeling {mood.lower()}."
-    if time_budget > 5:
-        reflection += " Small details can reveal what you need most."
+    # 2) Reflect their own words back (skipped for very short messages: nothing to reflect yet).
+    reflection = ""
+    last_reply = _norm(prior_assistant[-1]) if prior_assistant else ""
+    last_reflected = any(f"{lead.lower()} " in last_reply for lead in REFLECTION_LEADS)
+    if not is_brief(latest_user_message):
+        focus = [word for word in [topic or ""] + list(keyphrases[:3]) if word]
+        clause = reflect_clause(latest_user_message, focus, _PROFANITY_RE)
+        # Echoing a whole message back turn after turn reads as parroting; vary it.
+        echo = clause is not None and coverage(clause, latest_user_message) > 0.8
+        short_echo = echo and len(latest_user_message.split()) <= 8
+        if area and area.key == "loss" and stage == 0:
+            clause = None  # after "I'm so sorry", repeating the loss back reads as cold
+        if clause and not short_echo and not (last_reflected and echo):
+            leads = [lead for lead in REFLECTION_LEADS if f"{lead.lower()} " not in last_reply]
+            if "sound" in ack.lower():
+                leads = [lead for lead in leads if "sound" not in lead.lower()] or ["So"]
+            reflection = f"{pick(leads, clause)} {clause}."
+            reflection = reflection[0].upper() + reflection[1:]
+    if not ack and not reflection:
+        unused = [a for a in NEUTRAL_ACKS if _norm(a) not in said_before] or list(NEUTRAL_ACKS)
+        ack = pick(unused, latest_user_message)
 
+    # 3) Connect to a past entry only when one really mentions the same thing, once per session.
     mentioned = _entries_mentioning(retrieved_entries, topic, 2)
-    similar = [] if mentioned else _similar_entries(retrieved_entries)
+    similar = [] if mentioned else _similar_entries(retrieved_entries, threshold=0.6)
     evidence_entries = mentioned or similar
     evidence_cards = [
         EvidenceCard(
@@ -594,41 +639,32 @@ def build_reflection_plan(
         )
         for entry in evidence_entries
     ]
-    if mentioned:
-        pattern = f"You've written about {shown} before." if time_budget > 5 else f"A past entry touched on {shown} too."
-    elif similar:
-        pattern = "This echoes something you wrote before."
-    else:
-        pattern = "It can help to notice what keeps returning."
+    already_linked = any("you've written about" in _norm(t) or "echoes something" in _norm(t) for t in prior_assistant)
+    pattern = ""
+    if evidence_entries and not already_linked:
+        quote = _snippet(evidence_entries[0].text, 70)
+        if mentioned:
+            pattern = f"You've written about {shown} before: \u201c{quote}\u201d"
+        else:
+            pattern = f"This echoes something you wrote recently: \u201c{quote}\u201d"
 
-    llm_cues = generate_journal_cues(
-        message=latest_user_message,
-        mood=mood,
-        time_budget=time_budget,
-        keyphrases=keyphrases,
-        evidence_cards=evidence_cards,
-        allow_llm=allow_llm,
-        user_id=user_id,
+    # 4) One specific question that moves the conversation a step deeper.
+    options = question_candidates(
+        area=area,
+        stage=stage,
+        feeling=explicit_feeling,
+        feeling_follow_ups=FOLLOW_UPS.get(feeling or "", ()),
+        positive=positive,
+        advice=advice,
+        wrap_up=wrap_up_due(prior_user, time_budget),
     )
-    if llm_cues:
-        nudge = llm_cues
-    elif time_budget <= 5:
-        around = f" around {shown}" if topic else ""
-        nudge = f"Journal cues: 1) name the moment{around}, 2) name the feeling, 3) name what you needed."
-    else:
-        with_topic = f" with {shown}" if topic else ""
-        nudge = (
-            f"Journal cues: 1) what happened{with_topic}, 2) how it landed, "
-            "3) what you needed, 4) one gentle next step."
-        )
-
-    question = _choose_follow_up(feeling, shown, history)
+    question = first_unasked(options, prior_assistant)
 
     return _plan(
-        validation,
+        ack,
         reflection,
         pattern,
-        nudge,
+        "",
         question,
         safety,
         evidence=evidence_cards,
@@ -638,7 +674,9 @@ def build_reflection_plan(
             "emotion_confidence": affect.emotion_confidence,
             "sentiment": {"label": affect.sentiment_label, "score": affect.sentiment_score},
             "keyphrases": keyphrases,
-            "llm_cues": bool(llm_cues),
+            "life_area": area.key if area else None,
+            "stage": stage,
+            "feeling": explicit_feeling,
             "degraded": affect.degraded,
         },
     )

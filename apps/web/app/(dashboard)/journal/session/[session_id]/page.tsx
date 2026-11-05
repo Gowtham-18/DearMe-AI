@@ -144,7 +144,7 @@ export default function JournalSessionPage() {
         setNotice(data.warning);
       }
       if (enhancedEnabled && !data.safety?.crisis && data.assistant?.mode !== "enhanced") {
-        setEnhancedStatus("Enhanced wording isn't available right now, so a standard reply was used.");
+        setEnhancedStatus("AI replies aren't available right now, so the built-in companion replied.");
       }
 
       if (data.assistant_turn) {
@@ -249,7 +249,7 @@ export default function JournalSessionPage() {
             <p className="text-xs text-muted-foreground">Private session</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {enhancedEnabled && <Badge variant="secondary">Enhanced wording</Badge>}
+            {enhancedEnabled && <Badge variant="secondary">AI replies</Badge>}
             <Badge variant="secondary">{sessionStatus === "COMPLETED" ? "Completed" : "Active"}</Badge>
             <Button
               size="sm"

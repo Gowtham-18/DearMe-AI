@@ -1,7 +1,7 @@
+import json
 from types import SimpleNamespace
 
 from app import openai_rewriter
-from app.companion import build_reflection_plan
 from app.weekly import build_weekly_reflection
 
 SAFE = {"crisis": False, "reason": None}
@@ -51,56 +51,77 @@ def _fake_client(content: str):
     return client, calls
 
 
-def _plan():
-    return build_reflection_plan(
-        user_id="u1",
-        selected_prompt="",
-        latest_user_message="Work was stressful again today, the deadline is close.",
-        retrieved_entries=[],
-        time_budget=5,
+def _reply(**overrides):
+    params = dict(
+        message="my health",
+        history=[],
+        selected_prompt="What feels most important to explore right now?",
         mood=None,
-        safety=SAFE,
+        first_name="Asha",
+        analysis={"life_area": "health", "conversation_stage": 0},
+        evidence_cards=[],
+        draft="Health worries can take up a lot of space. What's been going on?",
+        user_id="u1",
     )
+    params.update(overrides)
+    return openai_rewriter.generate_reply(**params)
 
 
-def test_rewrite_uses_chat_completions_with_strict_schema(monkeypatch) -> None:
-    plan = _plan()
-    rewrite = {
-        "validation": plan.validation.text,
-        "reflection": plan.reflection.text,
-        "pattern_connection": plan.pattern_connection.text,
-        "gentle_nudge": plan.gentle_nudge.text,
-        "follow_up_question": plan.follow_up_question.text,
+def _enable(monkeypatch, client) -> None:
+    monkeypatch.setenv("ENABLE_ENHANCED_LANGUAGE", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(openai_rewriter, "_get_client", lambda: client)
+    monkeypatch.setattr(openai_rewriter, "_budget_day", "")
+
+
+def test_generate_reply_uses_strict_schema_and_returns_text(monkeypatch) -> None:
+    good = {
+        "reply": "Asha, health can quietly shape everything else in a day.",
+        "question": "What's been happening with your health lately, something physical or more how you've been feeling?",
     }
-    import json
-
-    client, calls = _fake_client(json.dumps(rewrite))
-    monkeypatch.setenv("ENABLE_ENHANCED_LANGUAGE", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(openai_rewriter, "_get_client", lambda: client)
-    result = openai_rewriter.rewrite_plan(plan, plan.evidence_cards, plan.constraints, user_id="u1")
-    assert result is not None
+    client, calls = _fake_client(json.dumps(good))
+    _enable(monkeypatch, client)
+    assert _reply() == good
     assert calls[0]["response_format"]["json_schema"]["strict"] is True
+    sent = json.loads(calls[0]["messages"][1]["content"])
+    assert sent["latest_message"] == "my health" and sent["is_first_reply"] is True
 
 
-def test_rewrite_rejects_advice(monkeypatch) -> None:
-    plan = _plan()
-    bad = (
-        '{"validation":"You should see a therapist.","reflection":"x","pattern_connection":"x",'
-        '"gentle_nudge":"x","follow_up_question":"x?"}'
-    )
-    client, _ = _fake_client(bad)
-    monkeypatch.setenv("ENABLE_ENHANCED_LANGUAGE", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(openai_rewriter, "_get_client", lambda: client)
-    assert openai_rewriter.rewrite_plan(plan, [], plan.constraints) is None
+def test_generate_reply_falls_back_to_json_object_when_schema_unsupported(monkeypatch) -> None:
+    class BadRequestError(Exception):
+        pass
+
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if kwargs["response_format"]["type"] == "json_schema":
+            raise BadRequestError("json_schema not supported")
+        content = json.dumps({"reply": "That sounds like a lot.", "question": "What happened?"})
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, refusal=None))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    _enable(monkeypatch, client)
+    assert _reply()["question"] == "What happened?"
+    assert [c["response_format"]["type"] for c in calls] == ["json_schema", "json_object"]
 
 
-def test_rewrite_disabled_without_server_flag(monkeypatch) -> None:
+def test_generate_reply_rejects_advice_and_bad_shape(monkeypatch) -> None:
+    for bad in (
+        {"reply": "You should see a therapist.", "question": "Will you?"},
+        {"reply": "Hmm.", "question": "Two? Questions?"},
+        {"reply": "Is that hard?", "question": "What happened?"},
+        {"reply": "Okay.", "question": "No question mark"},
+    ):
+        client, _ = _fake_client(json.dumps(bad))
+        _enable(monkeypatch, client)
+        assert _reply() is None, bad
+
+
+def test_generate_reply_disabled_without_server_flag(monkeypatch) -> None:
     monkeypatch.delenv("ENABLE_ENHANCED_LANGUAGE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    plan = _plan()
-    assert openai_rewriter.rewrite_plan(plan, [], plan.constraints) is None
+    assert _reply() is None
 
 
 def test_daily_budget_caps_calls(monkeypatch) -> None:

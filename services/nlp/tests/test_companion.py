@@ -144,10 +144,89 @@ def test_follow_up_question_does_not_repeat() -> None:
     assert second.follow_up_question.text != first.follow_up_question.text
 
 
-def test_llm_cues_not_called_without_consent(monkeypatch) -> None:
-    calls = []
-    monkeypatch.setattr("app.openai_rewriter._chat_json", lambda *a, **k: calls.append(1) or {"cues": ["a b", "c d"]})
-    monkeypatch.setenv("ENABLE_ENHANCED_LANGUAGE", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    _plan("Work was stressful again today.", allow_llm=False)
-    assert calls == []
+def _say(plan) -> str:
+    rendered = render_plan_to_message(plan)
+    return " ".join(
+        part for part in [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.follow_up_question] if part
+    )
+
+
+def test_brief_topic_gets_specific_question_not_template() -> None:
+    plan = _plan("my health", selected_prompt="What feels most important to explore right now?", user_name="Gowtham G")
+    text = _say(plan)
+    assert plan.validation.text.startswith("Gowtham, ")  # first name only, lower-case continuation
+    assert "health" in plan.follow_up_question.text.lower()
+    assert "Journal cues" not in text and "name the feeling" not in text
+    assert "sad" not in text.lower()  # two words carry no feeling; don't invent one
+    assert "Thanks for sharing" not in text
+
+
+def test_name_used_only_on_first_reply() -> None:
+    history = [
+        ChatMessage(role="user", content="my health"),
+        ChatMessage(role="assistant", content="Health worries can take up space. What's been going on?"),
+    ]
+    plan = _plan("I keep getting headaches and I'm worried", history=history, user_name="Asha")
+    assert not plan.validation.text.startswith("Asha")
+
+
+def test_conversation_moves_deeper_on_the_same_topic() -> None:
+    first = _plan("my health")
+    history = [
+        ChatMessage(role="user", content="my health"),
+        ChatMessage(role="assistant", content=f"{first.validation.text} {first.follow_up_question.text}"),
+    ]
+    second = _plan("I've been getting headaches every day for two weeks now", history=history)
+    assert second.signals["life_area"] == "health"
+    assert second.signals["stage"] >= 1
+    assert second.follow_up_question.text != first.follow_up_question.text
+    assert "you've been getting headaches" in second.reflection.text.lower()
+
+
+def test_reflection_flips_to_second_person() -> None:
+    plan = _plan("My manager moved the deadline up and I was stuck in meetings all day")
+    assert "your manager" in plan.reflection.text.lower()
+    assert " my " not in f" {plan.reflection.text.lower()} "
+    assert plan.signals["life_area"] == "work"
+
+
+def test_positive_moments_get_positive_questions() -> None:
+    plan = _plan("Took my dog for a long walk this evening and felt calm and happy for once")
+    question = plan.follow_up_question.text.lower()
+    assert "weighing" not in question and "worries" not in question
+    assert plan.validation.text in {"That sounds really steadying.", "That's lovely to hear."}
+
+
+def test_advice_requests_are_turned_back_gently() -> None:
+    plan = _plan("My sister and I keep fighting, what should I do?")
+    assert "think it through together" in plan.validation.text
+    assert plan.follow_up_question.text.endswith("?")
+
+
+def test_no_filler_pattern_without_evidence() -> None:
+    plan = _plan("Work was stressful again today.")
+    assert plan.pattern_connection.text == ""
+    assert plan.gentle_nudge.text == ""
+
+
+def test_wrap_up_question_after_several_turns() -> None:
+    history = []
+    for text in ["work was hard", "my manager yelled", "I felt small", "I want to speak up"]:
+        history += [ChatMessage(role="user", content=text), ChatMessage(role="assistant", content="Okay. What else?")]
+    plan = _plan("I think I need to set boundaries", history=history, time_budget=5)
+    assert plan.follow_up_question.text.startswith("Before you wrap up")
+
+
+def test_opening_prompt_turn_does_not_count_as_a_reply() -> None:
+    prompt = "What feels most important to explore right now?"
+    history = [ChatMessage(role="assistant", content=prompt), ChatMessage(role="user", content="my health")]
+    plan = _plan("my health", selected_prompt=prompt, history=history, user_name="Gowtham G")
+    assert plan.validation.text.startswith("Gowtham, ")
+
+
+def test_keyphrases_only_join_real_neighbours() -> None:
+    from app.pipeline import extract_keyphrases
+
+    phrases = extract_keyphrases("Grateful for a quiet morning walk with the dog before work.", 8)
+    assert "dog work" not in phrases
+    assert not any(phrase.startswith("getting") for phrase in extract_keyphrases("I keep getting headaches every day", 8))

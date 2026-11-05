@@ -30,9 +30,16 @@ except Exception:  # pragma: no cover - optional at runtime
     SentimentIntensityAnalyzer = None
 
 try:
-    from sklearn.feature_extraction.text import CountVectorizer
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, CountVectorizer
 except Exception:  # pragma: no cover - optional at runtime
-    CountVectorizer = None
+    ENGLISH_STOP_WORDS, CountVectorizer = frozenset(), None
+
+# Stop words plus contraction stubs the default tokenizer leaves behind ("didn't" -> "didn").
+_KEYPHRASE_STOP_WORDS = frozenset(ENGLISH_STOP_WORDS) | {
+    "didn", "doesn", "don", "isn", "wasn", "weren", "couldn", "wouldn", "shouldn", "won", "ve", "ll",
+    "re", "im", "ive", "really", "just", "got", "get", "feel", "felt", "feeling", "today", "day",
+    "getting", "going", "doing", "having", "making", "taking", "trying", "thinking", "keep", "kept",
+}
 
 try:
     import yake
@@ -369,14 +376,23 @@ def _mmr_keyphrases(text: str, top_n: int, diversity: float = 0.5) -> Optional[L
     model = get_embedding_model()
     if model is None or CountVectorizer is None:
         return None
+    # N-grams are built per sentence and over the real word sequence; any n-gram containing a
+    # stop word is then dropped. (Removing stop words *before* forming bigrams glues
+    # non-neighbours together: "dog before work" -> "dog work".)
+    sentences = [part for part in re.split(r"[.!?;:\n]+", text) if part.strip()]
     try:
-        vectorizer = CountVectorizer(ngram_range=(1, 2), stop_words="english")
-        counts = vectorizer.fit_transform([text])
+        vectorizer = CountVectorizer(ngram_range=(1, 2))
+        counts = vectorizer.fit_transform(sentences)
         vocabulary = vectorizer.get_feature_names_out()
-    except ValueError:  # only stop words / no tokens
+    except ValueError:  # no tokens
         return []
-    frequency = counts.toarray()[0]
-    order = np.argsort(-frequency, kind="stable")[:MAX_KEYPHRASE_CANDIDATES]
+    frequency = np.asarray(counts.sum(axis=0)).ravel()
+    usable = np.array(
+        [not any(word in _KEYPHRASE_STOP_WORDS for word in str(term).split()) for term in vocabulary], dtype=bool
+    )
+    if not usable.any():
+        return []
+    order = [i for i in np.argsort(-frequency, kind="stable") if usable[i]][:MAX_KEYPHRASE_CANDIDATES]
     candidates = [str(vocabulary[i]) for i in order]
     if not candidates:
         return []
