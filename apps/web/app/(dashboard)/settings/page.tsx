@@ -14,13 +14,14 @@ import {
 } from "@/components/ui/dialog";
 import { useSessionStore } from "@/store/use-session-store";
 import { useProfileStore } from "@/store/use-profile-store";
-import { deleteAllEntries, listEntries } from "@/lib/db/entries";
-import { deleteProfile, getProfile, updateProfilePreferences } from "@/lib/db/profiles";
+import { listEntries } from "@/lib/db/entries";
+import { getProfile, updateProfilePreferences } from "@/lib/db/profiles";
 import { listEntryAnalysis } from "@/lib/db/analysis";
 import { listThemes, listThemeMembership } from "@/lib/db/themes";
 import { listWeeklyReflections } from "@/lib/db/weekly";
 import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
-import { deleteUserInsights } from "@/lib/db/cleanup";
+import { deleteMyData } from "@/lib/db/cleanup";
+import CrisisResources from "@/components/crisis-resources";
 
 export default function SettingsPage() {
   const { ensureUserId } = useSessionStore();
@@ -147,25 +148,11 @@ export default function SettingsPage() {
   const handleDelete = async () => {
     setDeleting(true);
     setStatus(null);
-    const userId = ensureUserId();
 
-    const insightsResult = await deleteUserInsights(userId);
-    if (insightsResult.error) {
-      setStatus({ message: "We couldn't delete your insights yet. Please try again.", tone: "error" });
-      setDeleting(false);
-      return;
-    }
-
-    const entriesResult = await deleteAllEntries(userId);
-    if (entriesResult.error) {
-      setStatus({ message: "We couldn't delete your entries yet. Please try again.", tone: "error" });
-      setDeleting(false);
-      return;
-    }
-
-    const profileResult = await deleteProfile(userId);
-    if (profileResult.error) {
-      setStatus({ message: "We couldn't delete your profile yet. Please try again.", tone: "error" });
+    // One transaction: either everything is deleted or nothing is.
+    const result = await deleteMyData(true);
+    if (result.error) {
+      setStatus({ message: "We couldn't delete your data. Nothing was removed. Please try again.", tone: "error" });
       setDeleting(false);
       return;
     }
@@ -173,7 +160,7 @@ export default function SettingsPage() {
     setProfile(null);
     setConfirmOpen(false);
     setDeleting(false);
-    setStatus({ message: "Your data was deleted from this demo.", tone: "success" });
+    setStatus({ message: "Your journals, insights and profile were deleted.", tone: "success" });
   };
 
   return (
@@ -199,7 +186,8 @@ export default function SettingsPage() {
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            Toggle off anytime. We only send the structured plan, not your full entry history.
+            When on, your latest message and up to two related snippets from past entries are sent to
+            OpenAI to word each reply. Your full journal is never sent. Turn it off anytime.
           </p>
           {prefStatus && (
             <p
@@ -217,8 +205,9 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4 text-sm text-muted-foreground">
           <p>
-            Your journal entries are private. This demo stores an anonymous identity in this
-            browser, and uses Supabase with an anon key for persistence.
+            Your journal is private to you. You're signed in anonymously on this browser, and the
+            database only returns rows that belong to your account. Clearing this browser&apos;s data
+            signs you out, so export first if you want a copy.
           </p>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={handleExport} disabled={exporting}>
@@ -262,11 +251,10 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Crisis routing</CardTitle>
+          <CardTitle className="text-base">If you need support now</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          In future phases, we will provide regional crisis resources and a direct
-          routing flow.
+        <CardContent>
+          <CrisisResources />
         </CardContent>
       </Card>
 
@@ -275,8 +263,8 @@ export default function SettingsPage() {
           <CardTitle className="text-base">Data minimization & consent</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          We collect the minimum metadata needed for personalization. Clearing your browser data
-          resets this anonymous demo identity.
+          We collect the minimum needed for personalization: your name, age, optional occupation and
+          what you write. Nothing is used to train models.
         </CardContent>
       </Card>
 
@@ -285,8 +273,8 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Delete all data?</DialogTitle>
             <DialogDescription>
-              This removes your profile and journal entries from the demo database. This cannot be
-              undone.
+              This permanently removes your profile, journal entries, chats and insights. This cannot
+              be undone.
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">
@@ -305,8 +293,9 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Enable enhanced wording?</DialogTitle>
             <DialogDescription>
-              This optional mode uses a language model to rewrite responses only. It does not
-              change meaning or add new advice. You can turn it off anytime.
+              This optional mode sends your latest message and up to two related snippets from past
+              entries to OpenAI, which rewords the companion&apos;s reply and suggests writing cues.
+              It does not change meaning or add advice. You can turn it off anytime.
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">

@@ -17,7 +17,9 @@ import {
   getSession,
   type JournalTurnRecord,
 } from "@/lib/db/sessions";
-import { createEntry, getEntryForDate, listEntries, updateEntry } from "@/lib/db/entries";
+import { createEntry, getEntryForSession, listEntries, updateEntry } from "@/lib/db/entries";
+import { apiFetch } from "@/lib/auth";
+import CrisisResources from "@/components/crisis-resources";
 
 export default function JournalSessionPage() {
   const router = useRouter();
@@ -33,9 +35,10 @@ export default function JournalSessionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
-  const [mood] = useState<string | null>(null);
-  const [timeBudget] = useState<number>(5);
+  const [crisis, setCrisis] = useState(false);
+  const [mood, setMood] = useState<string | null>(null);
+  const [timeBudget, setTimeBudget] = useState<number>(5);
+  const [entryDate, setEntryDate] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishMessage, setFinishMessage] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<"ACTIVE" | "COMPLETED">("ACTIVE");
@@ -51,6 +54,11 @@ export default function JournalSessionPage() {
       const { data: sessionData } = await getSession(sessionId);
       if (sessionData?.status) {
         setSessionStatus(sessionData.status);
+      }
+      if (sessionData) {
+        setMood(sessionData.mood ?? null);
+        setTimeBudget(sessionData.time_budget ?? 5);
+        setEntryDate(sessionData.entry_date ?? null);
       }
     };
 
@@ -72,7 +80,6 @@ export default function JournalSessionPage() {
 
   const handleSend = async () => {
     if (!input.trim()) return;
-    if (safetyNotice) return;
     if (sessionStatus === "COMPLETED") return;
 
     setSending(true);
@@ -106,18 +113,7 @@ export default function JournalSessionPage() {
     setInput("");
 
     try {
-      const response = await fetch("/api/chat/turn", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          sessionId,
-          latestUserMessage: message,
-          timeBudget,
-          mood,
-          enhancedLanguageEnabled: enhancedEnabled,
-        }),
-      });
+      const response = await apiFetch("/api/chat/turn", { sessionId, latestUserMessage: message });
 
       if (!response.ok) {
         let errorMessage = "We couldn't generate a response yet.";
@@ -142,17 +138,13 @@ export default function JournalSessionPage() {
       };
 
       if (data.safety?.crisis) {
-        setSafetyNotice(
-          "If you're feeling overwhelmed, consider reaching out to someone you trust. If you're in immediate danger, contact your local emergency number."
-        );
+        setCrisis(true);
       }
       if (data.warning) {
-        setNotice("The AI service is unavailable, so a simple response was used.");
+        setNotice(data.warning);
       }
-      if (enhancedEnabled && data.assistant?.mode !== "enhanced") {
-        setEnhancedStatus(
-          "Enhanced wording is currently unavailable. Check OPENAI_API_KEY and ENABLE_ENHANCED_LANGUAGE."
-        );
+      if (enhancedEnabled && !data.safety?.crisis && data.assistant?.mode !== "enhanced") {
+        setEnhancedStatus("Enhanced wording isn't available right now, so a standard reply was used.");
       }
 
       if (data.assistant_turn) {
@@ -189,9 +181,17 @@ export default function JournalSessionPage() {
       return;
     }
 
+    if (!sessionId) {
+      setError("We couldn't load this session yet.");
+      setFinishing(false);
+      return;
+    }
+
     const { data: existingEntries } = await listEntries(userId, 1);
     const isFirst = !existingEntries || existingEntries.length === 0;
-    const { data: existingEntry } = await getEntryForDate(userId, todayKey);
+    // One entry per session: finishing a second session today adds a new entry
+    // instead of overwriting the first one.
+    const { data: existingEntry } = await getEntryForSession(sessionId);
 
     let entryData = existingEntry;
     if (existingEntry) {
@@ -209,10 +209,11 @@ export default function JournalSessionPage() {
     } else {
       const { error: createError, data: createdEntry } = await createEntry({
         user_id: userId,
-        entry_date: todayKey,
+        entry_date: entryDate ?? todayKey,
         mood,
         time_budget: timeBudget,
         content: combined,
+        session_id: sessionId,
       });
       if (createError || !createdEntry) {
         setError("We couldn't save your journal yet. Please try again.");
@@ -222,21 +223,11 @@ export default function JournalSessionPage() {
       entryData = createdEntry;
     }
 
-    if (!sessionId) {
-      setError("We couldn't load this session yet.");
-      setFinishing(false);
-      return;
-    }
-
     await updateSessionStatus(sessionId, "COMPLETED");
     setSessionStatus("COMPLETED");
     window.dispatchEvent(new Event("journal-session-updated"));
 
-    const analyzeResponse = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ entryId: entryData.id }),
-    });
+    const analyzeResponse = await apiFetch("/api/analyze", { entryId: entryData.id });
     if (!analyzeResponse.ok) {
       setError("We saved your journal, but insights couldn't update yet.");
     }
@@ -292,11 +283,7 @@ export default function JournalSessionPage() {
           )}
         </div>
 
-        {safetyNotice && (
-          <Card className="border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive">
-            {safetyNotice}
-          </Card>
-        )}
+        {crisis && <CrisisResources />}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
         {notice && <p className="text-sm text-muted-foreground">{notice}</p>}
@@ -309,11 +296,11 @@ export default function JournalSessionPage() {
             placeholder="Type your thoughts..."
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            disabled={sending || Boolean(safetyNotice) || sessionStatus === "COMPLETED"}
+            disabled={sending || sessionStatus === "COMPLETED"}
           />
           <Button
             onClick={handleSend}
-            disabled={sending || Boolean(safetyNotice) || sessionStatus === "COMPLETED"}
+            disabled={sending || sessionStatus === "COMPLETED"}
           >
             {sending ? "Sending..." : "Send"}
           </Button>

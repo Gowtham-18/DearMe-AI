@@ -14,10 +14,14 @@ export function getSupabaseBrowserClient(): SupabaseClient {
     throw new Error("Missing Supabase environment variables.");
   }
 
+  // The session (an anonymous Supabase user) is persisted in localStorage and refreshed
+  // automatically. Every query runs as that user, so Row Level Security applies.
   browserClient = createClient(supabaseUrl, supabaseKey, {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+      storageKey: "dearme-auth",
     },
   });
 

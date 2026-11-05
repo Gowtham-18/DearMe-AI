@@ -23,11 +23,14 @@ export interface AnalyzeEntryResponse {
   keyphrases: string[];
   embedding: number[];
   safety: SafetyResult;
+  emotion?: string | null;
+  mood_suggestion?: string | null;
+  degraded?: string[];
 }
 
 export interface RecomputeThemesRequest {
   user_id: string;
-  entries: Array<{ entry_id: string; text: string; embedding: number[] }>;
+  entries: Array<{ entry_id: string; text: string; embedding: number[]; keyphrases?: string[] }>;
 }
 
 export interface ThemeMember {
