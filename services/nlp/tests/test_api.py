@@ -52,3 +52,23 @@ def test_analyze_entry_reports_degraded_embedding(monkeypatch) -> None:
     data = client.post("/analyze-entry", json={"user_id": "u", "entry_id": "e", "text": "A calm day."}).json()
     assert data["embedding"] == []
     assert "embedding_unavailable" in data["degraded"]
+
+
+def test_recompute_themes_endpoint_returns_themes(monkeypatch) -> None:
+    from app.pipeline import embed_text
+
+    client = _client(monkeypatch)
+    texts = [
+        "work stress, deadlines and my manager",
+        "deadline pressure at work again",
+        "another stressful meeting with my manager",
+        "a walk in the park with my dog",
+        "sunny walk with the dog this morning",
+        "evening walk in the park",
+    ]
+    entries = [{"entry_id": f"e{i}", "text": t, "embedding": embed_text(t)} for i, t in enumerate(texts)]
+    response = client.post("/recompute-themes", json={"user_id": "u1", "entries": entries})
+    assert response.status_code == 200, response.text
+    themes = response.json()["themes"]
+    assert themes, "six entries in two clear groups should produce at least one theme"
+    assert all(theme["members"] and theme["label"] for theme in themes)

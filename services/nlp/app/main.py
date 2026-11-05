@@ -1,5 +1,6 @@
 import hmac
 import logging
+from dataclasses import asdict
 import os
 import uuid
 from typing import Dict
@@ -254,7 +255,8 @@ def recompute_themes_handler(payload: RecomputeThemesRequest) -> RecomputeThemes
     entries = payload.entries[:MAX_THEME_ENTRIES]
     logger.info("recompute_themes user_id=%s entries=%s", payload.user_id, len(entries))
     themes = recompute_themes([entry.model_dump() for entry in entries])
-    return RecomputeThemesResponse(themes=themes)
+    # recompute_themes returns dataclasses; pydantic v2 only accepts dicts or its own models.
+    return RecomputeThemesResponse(themes=[asdict(theme) for theme in themes])
 
 
 @app.post("/weekly-reflection", response_model=WeeklyReflectionResponse)
