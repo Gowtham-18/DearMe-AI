@@ -42,11 +42,11 @@ jobs:
           cache-dependency-path: services/nlp/requirements*.txt
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('services/nlp/app/pipeline.py') }}
-          restore-keys: hf-models-
-      - run: pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -r requirements.txt -r requirements-dev.txt
+          path: services/nlp/.models
+          key: onnx-models-${{ hashFiles('services/nlp/app/pipeline.py') }}
+          restore-keys: onnx-models-
+      - run: pip install --only-binary=:all: -r requirements.txt -r requirements-dev.txt
+      - run: python -m app.fetch_models
       - run: pytest -q
 
   migrations:

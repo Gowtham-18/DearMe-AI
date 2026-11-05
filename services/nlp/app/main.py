@@ -1,8 +1,9 @@
 import hmac
 import logging
-from dataclasses import asdict
 import os
+import threading
 import uuid
+from dataclasses import asdict
 from typing import Dict
 
 from dotenv import load_dotenv
@@ -36,15 +37,11 @@ from .models import (  # noqa: E402
 )
 from .openai_rewriter import llm_available, rewrite_plan  # noqa: E402
 from .pipeline import (  # noqa: E402
-    SENTIMENT_SOURCE,
     analyze_affect,
     embed_text,
     extract_keyphrases,
-    get_embedding_model,
-    get_emotion_pipeline,
-    get_keybert,
-    get_sentiment_pipeline,
     models_status,
+    warm_models,
 )
 from .safety import detect_crisis  # noqa: E402
 from .themes import recompute_themes  # noqa: E402
@@ -88,16 +85,19 @@ async def require_internal_token(request: Request, call_next):
     return await call_next(request)
 
 
+def _warm_in_background() -> None:
+    warm_models()
+    logger.info("models ready status=%s llm_available=%s", models_status(), llm_available())
+
+
 @app.on_event("startup")
-def warm_models() -> None:
+def start_model_warmup() -> None:
+    # Load models off the startup path so uvicorn binds the port immediately (hosts such as
+    # Render fail a deploy that doesn't open its port in time). A request that arrives
+    # before warm-up finishes waits for the same one-time load instead of starting another.
     if not INTERNAL_TOKEN:
         logger.warning("NLP_INTERNAL_TOKEN is not set: POST endpoints are open to anyone.")
-    get_embedding_model()
-    get_emotion_pipeline()
-    get_keybert()
-    if SENTIMENT_SOURCE == "transformer":
-        get_sentiment_pipeline()
-    logger.info("models ready status=%s llm_available=%s", models_status(), llm_available())
+    threading.Thread(target=_warm_in_background, name="model-warmup", daemon=True).start()
 
 
 @app.get("/health")
