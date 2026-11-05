@@ -112,6 +112,7 @@ class ContextEntry(BaseModel):
     entry_id: str
     text: str
     created_at: Optional[str] = None
+    entry_date: Optional[str] = None  # the journal day (YYYY-MM-DD) in the person's own calendar
     mood: Optional[str] = None
     source: Optional[str] = None
     similarity: Optional[float] = None
@@ -127,6 +128,7 @@ class PromptItem(BaseModel):
     id: str
     text: str
     reason: str
+    example: Optional[str] = None  # a short sample answer, shown as "e.g. ..." to make starting easier
     evidence: List[PromptEvidence] = []
 
 
@@ -171,6 +173,7 @@ class PromptsRequestV1(BaseModel):
     user_id: str
     mood: Optional[str] = None
     time_budget_min: int = 5
+    today: Optional[str] = None  # the person's local date (YYYY-MM-DD)
     recent_entries: List[ContextEntry] = []
     similar_entries: List[ContextEntry] = []
     themes: List[str] = []

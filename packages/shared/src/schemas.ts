@@ -133,6 +133,7 @@ export const generatePromptsResponseSchema = z.object({
       id: z.string(),
       text: z.string(),
       reason: z.string(),
+      example: z.string().nullable().optional(),
       evidence: z.array(
         z.object({
           entry_id: z.string().nullable().optional(),
@@ -239,6 +240,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 export const promptsBodySchema = z.object({
   mood: z.string().max(30).nullable().optional(),
   timeBudget: z.union([z.literal(3), z.literal(5), z.literal(7), z.literal(10)]).optional(),
+  /** The person's local date, so follow-ups say "yesterday" by their calendar, not the server's. */
+  today: isoDate.optional(),
 });
 
 export const chatTurnBodySchema = z.object({

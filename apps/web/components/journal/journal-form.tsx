@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { ChevronRight, Sparkles } from "lucide-react";
+import { ChevronRight, Feather, Sparkles } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { moodOptions, timeBudgets } from "@/lib/prompts";
+import { cn } from "@/lib/utils";
+import { buildFallbackPrompts, freeWritePrompt, moodOptions, timeBudgets, type PromptItem } from "@/lib/prompts";
 import { formatLocalDate } from "@/lib/date";
 import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
@@ -18,31 +18,22 @@ import CrisisResources from "@/components/crisis-resources";
 
 const defaultTimeBudget = 5;
 
-type PromptItem = {
-  id: string;
-  text: string;
-  reason: string;
-  evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
+const chipClass = (selected: boolean) =>
+  cn(
+    "inline-flex h-9 cursor-pointer items-center rounded-full border px-4 text-sm font-medium transition-[color,background-color,border-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50",
+    selected
+      ? "border-primary bg-primary text-primary-foreground"
+      : "border-divider bg-background text-muted-foreground hover:border-foreground/30 hover:bg-foreground/[0.04] hover:text-foreground"
+  );
+
+type JournalFormProps = {
+  /** "page" renders inside a card on Today's Journal; "dialog" renders bare for the New Entry dialog. */
+  variant?: "page" | "dialog";
+  /** Called once a session has been created (e.g. to close the dialog). */
+  onStarted?: () => void;
 };
 
-const buildFallbackPrompts = (mood: string | null, timeBudget: number): PromptItem[] => {
-  const moodHint = mood ? `while feeling ${mood.toLowerCase()}` : "today";
-  const base = [
-    `With ${timeBudget} minutes, what feels most important to name right now?`,
-    `What moment from ${moodHint} stands out?`,
-    "What do you want to release before the day ends?",
-    "What small win do you want to remember?",
-  ];
-
-  return base.slice(0, 4).map((text, index) => ({
-    id: `starter_${index + 1}`,
-    text,
-    reason: "Starter prompt to help you begin.",
-    evidence: [],
-  }));
-};
-
-export default function JournalForm() {
+export default function JournalForm({ variant = "page", onStarted }: JournalFormProps) {
   const { ensureUserId } = useSessionStore();
   const router = useRouter();
   const [mood, setMood] = useState<string | null>(null);
@@ -54,17 +45,14 @@ export default function JournalForm() {
   const [crisis, setCrisis] = useState(false);
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
-  const emptyCopy = useMemo(
-    () => pickCopy(emptyStateCopy.todayJournal, new Date().toDateString()),
-    []
-  );
+  const emptyCopy = useMemo(() => pickCopy(emptyStateCopy.todayJournal, new Date().toDateString()), []);
 
   useEffect(() => {
     const loadPrompts = async () => {
       setPromptsLoading(true);
 
       try {
-        const response = await apiFetch("/api/prompts", { mood, timeBudget });
+        const response = await apiFetch("/api/prompts", { mood, timeBudget, today: formatLocalDate(new Date()) });
         if (response.ok) {
           const data = (await response.json()) as {
             prompts?: PromptItem[];
@@ -94,6 +82,7 @@ export default function JournalForm() {
   }, [mood, timeBudget]);
 
   const startSession = async (prompt: PromptItem) => {
+    if (starting) return;
     setStarting(true);
     setError(null);
     const userId = ensureUserId();
@@ -104,7 +93,7 @@ export default function JournalForm() {
       selected_prompt_id: prompt.id,
       selected_prompt_text: prompt.text,
       status: "ACTIVE",
-      title: prompt.text.slice(0, 60),
+      title: prompt.id === freeWritePrompt.id ? "Free writing" : prompt.text.slice(0, 60),
       mood,
       time_budget: timeBudget,
     });
@@ -123,56 +112,51 @@ export default function JournalForm() {
     });
 
     window.dispatchEvent(new Event("journal-session-updated"));
+    // Hand the example to the session page so it can use it as the writing placeholder.
+    try {
+      if (prompt.example) sessionStorage.setItem(`dearme:prompt-example:${data.id}`, prompt.example);
+    } catch {
+      // Storage can be unavailable (private mode); the placeholder just falls back to the default.
+    }
     setStarting(false);
+    onStarted?.();
     router.push(`/journal/session/${data.id}`);
   };
 
-  const handlePromptSelect = async (prompt: PromptItem) => {
-    await startSession(prompt);
-  };
-
-  return (
-    <Card className="flex h-full flex-col gap-4 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">Today's Journal</h2>
-          <p className="text-xs text-muted-foreground">Private session</p>
-        </div>
-        <Badge variant="secondary" className="gap-1">
-          Ready
-        </Badge>
-      </div>
-
-      <div className="space-y-3">
-        <p className="text-sm font-medium">Mood (optional)</p>
-        <div className="flex flex-wrap gap-2">
+  const body = (
+    <>
+      <div className="space-y-2.5">
+        <p className="text-sm font-medium">How are you feeling? <span className="font-normal text-muted-foreground">(optional)</span></p>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Mood">
           {moodOptions.map((option) => (
-            <Button
+            <button
               key={option}
-              variant={mood === option ? "default" : "outline"}
-              onClick={() => setMood(option)}
+              type="button"
+              aria-pressed={mood === option}
+              onClick={() => setMood(mood === option ? null : option)}
               disabled={starting}
-              className="rounded-full px-4"
+              className={chipClass(mood === option)}
             >
               {option}
-            </Button>
+            </button>
           ))}
         </div>
       </div>
 
-      <div className="space-y-3">
-        <p className="text-sm font-medium">Time budget</p>
-        <div className="flex flex-wrap gap-2">
+      <div className="space-y-2.5">
+        <p className="text-sm font-medium">How much time do you have?</p>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Time budget">
           {timeBudgets.map((option) => (
-            <Button
+            <button
               key={option}
-              variant={timeBudget === option ? "default" : "outline"}
+              type="button"
+              aria-pressed={timeBudget === option}
               onClick={() => setTimeBudget(option)}
               disabled={starting}
-              className="rounded-full px-4"
+              className={chipClass(timeBudget === option)}
             >
               {option} min
-            </Button>
+            </button>
           ))}
         </div>
       </div>
@@ -180,12 +164,8 @@ export default function JournalForm() {
       <div className="rounded-2xl border border-divider bg-surface-2 p-4 text-sm text-muted-foreground">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-              AI prompts
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Pick a prompt to begin a private journal session.
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Prompts for you</p>
+            <p className="mt-1 text-xs text-muted-foreground">Pick one to start. Each has an example to show how simple an answer can be.</p>
           </div>
           <Sparkles className="h-4 w-4 text-muted-foreground" />
         </div>
@@ -195,44 +175,78 @@ export default function JournalForm() {
           </div>
         )}
         {promptsLoading ? (
-          <p className="mt-2 text-xs text-muted-foreground">Loading prompts...</p>
+          <div className="mt-4 space-y-3" aria-busy="true" aria-label="Loading prompts">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="h-[72px] animate-pulse rounded-2xl border border-divider bg-background/60" />
+            ))}
+          </div>
         ) : (
           <div className="mt-4 space-y-3">
-            {prompts.length === 0 && (
-              <p className="text-xs text-muted-foreground">{emptyCopy}</p>
-            )}
-            {prompts.map((prompt) => (
-              <button
-                key={prompt.id}
-                type="button"
-                onClick={() => handlePromptSelect(prompt)}
-                className="group w-full cursor-pointer rounded-2xl border border-divider bg-background p-4 text-left transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-hover-gray focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={starting}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
+            {prompts.length === 0 && <p className="text-xs text-muted-foreground">{emptyCopy}</p>}
+            {[...prompts, freeWritePrompt].map((prompt) => {
+              const isFreeWrite = prompt.id === freeWritePrompt.id;
+              return (
+                <button
+                  key={prompt.id}
+                  type="button"
+                  onClick={() => startSession(prompt)}
+                  className={cn(
+                    "group w-full cursor-pointer rounded-2xl border bg-background p-4 text-left transition-[border-color,box-shadow,background-color] duration-150 hover:border-foreground/25 hover:shadow-hover-gray focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60",
+                    isFreeWrite ? "border-dashed border-divider" : "border-divider"
+                  )}
+                  disabled={starting}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                        {isFreeWrite && <Feather className="h-3.5 w-3.5 text-muted-foreground" />}
+                        {prompt.text}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{prompt.reason}</p>
+                      {prompt.example && !isFreeWrite && (
+                        <p className="text-xs italic text-muted-foreground/90">{prompt.example}</p>
+                      )}
+                    </div>
+                    <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground" />
                   </div>
-                  <ChevronRight className="mt-1 h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </div>
-                {prompt.evidence?.length > 0 && (
-                  <div className="mt-2 space-y-2">
-                    {prompt.evidence.map((item, index) => (
-                      <div key={`${prompt.id}-${index}`} className="rounded-xl bg-muted/60 p-3">
-                        <p className="text-xs text-muted-foreground">{item.reason}</p>
-                        <p className="text-xs text-muted-foreground">"{item.snippet}"</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </button>
-            ))}
+                  {prompt.evidence?.length > 0 && (
+                    <div className="mt-2 space-y-2">
+                      {prompt.evidence.map((item, index) => (
+                        <div key={`${prompt.id}-${index}`} className="rounded-xl bg-muted/60 p-3">
+                          <p className="text-xs text-muted-foreground">{item.reason}</p>
+                          <p className="text-xs text-muted-foreground">&ldquo;{item.snippet}&rdquo;</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
+      {starting && <p className="text-xs text-muted-foreground">Starting your session...</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
+    </>
+  );
+
+  if (variant === "dialog") {
+    return <div className="flex flex-col gap-5">{body}</div>;
+  }
+
+  return (
+    <Card className="flex h-full flex-col gap-5 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Today&apos;s Journal</h2>
+          <p className="text-xs text-muted-foreground">Private session</p>
+        </div>
+        <Badge variant="secondary" className="gap-1">
+          Ready
+        </Badge>
+      </div>
+      {body}
     </Card>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { Card } from "@/components/ui/card";
@@ -20,6 +20,7 @@ import {
 import { createEntry, getEntryForSession, listEntries, updateEntry } from "@/lib/db/entries";
 import { apiFetch } from "@/lib/auth";
 import CrisisResources from "@/components/crisis-resources";
+import { sentenceStarters } from "@/lib/prompts";
 
 export default function JournalSessionPage() {
   const router = useRouter();
@@ -45,6 +46,30 @@ export default function JournalSessionPage() {
   const [enhancedStatus, setEnhancedStatus] = useState<string | null>(null);
 
   const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [placeholder, setPlaceholder] = useState("Type your thoughts...");
+
+  // The prompt card's example becomes the placeholder, so the box shows what an answer can look like.
+  useEffect(() => {
+    if (!sessionId) return;
+    try {
+      const example = sessionStorage.getItem(`dearme:prompt-example:${sessionId}`);
+      if (example) setPlaceholder(example);
+    } catch {
+      // Storage unavailable: keep the default placeholder.
+    }
+  }, [sessionId]);
+
+  const insertStarter = (starter: string) => {
+    const opener = starter.replace(/…$/, " ");
+    setInput((current) => (current.trim() ? `${current.trimEnd()}\n${opener}` : opener));
+    requestAnimationFrame(() => {
+      const box = textareaRef.current;
+      if (!box) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    });
+  };
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
 
@@ -290,10 +315,28 @@ export default function JournalSessionPage() {
         {enhancedStatus && <p className="text-sm text-muted-foreground">{enhancedStatus}</p>}
         {finishMessage && <p className="text-sm text-emerald-600">{finishMessage}</p>}
 
+        {sessionStatus === "ACTIVE" && !turns.some((turn) => turn.role === "user") && (
+          <div className="flex flex-wrap items-center gap-2" aria-label="Sentence starters">
+            <span className="text-xs text-muted-foreground">Stuck? Try starting with</span>
+            {sentenceStarters.map((starter) => (
+              <button
+                key={starter}
+                type="button"
+                onClick={() => insertStarter(starter)}
+                disabled={sending}
+                className="cursor-pointer rounded-full border border-divider bg-background px-3 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:border-foreground/30 hover:bg-foreground/[0.04] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
+              >
+                {starter}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="flex gap-2">
           <Textarea
+            ref={textareaRef}
             className="min-h-[72px]"
-            placeholder="Type your thoughts..."
+            placeholder={placeholder}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             disabled={sending || sessionStatus === "COMPLETED"}
