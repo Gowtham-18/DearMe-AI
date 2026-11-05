@@ -141,6 +141,25 @@ await db.query(`select delete_my_data(true)`);
 const counts = await db.query(`select (select count(*) from entries)::int e, (select count(*) from journal_sessions)::int s, (select count(*) from profiles)::int p, (select count(*) from themes)::int t`);
 ok(Object.values(counts.rows[0]).every((n) => n === 0), "delete_my_data removes everything for the user");
 
+// Phase 6c: internal tables locked to the definer functions
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase6c-hardening.sql"));
+ok(true, "phase 6c applied");
+await as("authenticated", B);
+let internalBlocked = 0;
+for (const t of ["app_settings", "legacy_claims", "rate_limits"]) {
+  try { await db.query(`select * from ${t} limit 1`); } catch { internalBlocked += 1; }
+}
+ok(internalBlocked === 3, "signed-in users cannot read the internal tables directly");
+const { rows: bRate2 } = await db.query(`select check_rate_limit('weekly', 1, 60) as a, check_rate_limit('weekly', 1, 60) as b`);
+ok(bRate2[0].a && !bRate2[0].b, "rate limiting still works through its function after 6c");
+await as("anon");
+let anonInternal = 0;
+for (const t of ["app_settings", "legacy_claims", "rate_limits"]) {
+  try { await db.query(`select * from ${t} limit 1`); } catch { anonInternal += 1; }
+}
+ok(anonInternal === 3, "signed-out role cannot see the internal tables");
+
 await db.exec(`reset role`);
 const { rows: ben } = await db.query(`select count(*)::int as n from entries where user_id = $1`, [VICTIM_LEGACY]);
 ok(ben[0].n === 1, "other users' (unclaimed) data untouched");
