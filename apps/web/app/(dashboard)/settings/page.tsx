@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +21,6 @@ import { listThemes, listThemeMembership } from "@/lib/db/themes";
 import { listWeeklyReflections } from "@/lib/db/weekly";
 import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
 import { deleteUserInsights } from "@/lib/db/cleanup";
-import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
   const { ensureUserId } = useSessionStore();
@@ -184,32 +184,19 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>{enhancedSummary}</p>
-          <div className="flex items-center justify-between rounded-2xl border bg-muted/40 px-4 py-3">
+          <div className="flex items-center justify-between rounded-2xl border border-divider bg-surface-2 px-4 py-3">
             <div>
               <p className="text-sm font-medium text-foreground">Rewrite-only mode</p>
               <p className="text-xs text-muted-foreground">
                 Uses a language model to improve tone only. Insights stay grounded in your entries.
               </p>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={enhancedEnabled}
-              onClick={handleEnhancedToggle}
-              disabled={!canToggleEnhanced}
-              className={cn(
-                "relative inline-flex h-6 w-11 items-center rounded-full transition",
-                enhancedEnabled ? "bg-foreground" : "bg-muted",
-                !canToggleEnhanced && "cursor-not-allowed opacity-60"
-              )}
-            >
-              <span
-                className={cn(
-                  "inline-block h-5 w-5 transform rounded-full bg-background shadow transition",
-                  enhancedEnabled ? "translate-x-5" : "translate-x-1"
-                )}
-              />
-            </button>
+            <Switch
+              checked={enhancedEnabled}
+              onCheckedChange={() => handleEnhancedToggle()}
+              disabled={!canToggleEnhanced || updatingEnhanced}
+              aria-label="Enhanced wording toggle"
+            />
           </div>
           <p className="text-xs text-muted-foreground">
             Toggle off anytime. We only send the structured plan, not your full entry history.
@@ -278,7 +265,7 @@ export default function SettingsPage() {
           <CardTitle className="text-base">Crisis routing</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Placeholder: In future phases, we will provide regional crisis resources and a direct
+          In future phases, we will provide regional crisis resources and a direct
           routing flow.
         </CardContent>
       </Card>

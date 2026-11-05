@@ -5,5 +5,19 @@
   "What small win are you proud of?",
 ];
 
-export const moodOptions = ["Calm", "Happy", "Neutral", "Stressed", "Sad"] as const;
+export const moodOptions = [
+  "Calm",
+  "Happy",
+  "Neutral",
+  "Stressed",
+  "Sad",
+  "Anxious",
+  "Tired",
+  "Lonely",
+  "Overwhelmed",
+  "Grateful",
+  "Irritated",
+  "Hopeful",
+  "Focused",
+] as const;
 export const timeBudgets = [3, 5, 7, 10] as const;

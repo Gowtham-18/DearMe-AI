@@ -192,3 +192,102 @@ def rewrite_plan(
         return None
 
     return rendered
+
+
+def _openai_enabled(flag_name: str, default: bool = False) -> bool:
+    value = os.getenv(flag_name)
+    if value is None:
+        return default
+    return value.lower() in {"true", "1", "yes"}
+
+
+def generate_journal_cues(
+    message: str,
+    mood: Optional[str],
+    time_budget: int,
+    keyphrases: List[str],
+    evidence_cards: List[EvidenceCard],
+) -> Optional[str]:
+    if OpenAI is None:
+        return None
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    enabled_env = os.getenv("ENABLE_OPENAI_CUES")
+    if enabled_env is None:
+        enabled = True
+    else:
+        enabled = _openai_enabled("ENABLE_OPENAI_CUES", False)
+    if not enabled:
+        return None
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+    max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "160"))
+
+    trimmed_message = " ".join(message.split())[:400]
+    evidence_snippets = [card.snippet for card in evidence_cards if card.snippet][:2]
+
+    system_prompt = (
+        "You generate concise journaling cues. "
+        "Return JSON only: {\"cues\": [\"...\", \"...\", \"...\"]}. "
+        "Cues must be short (max 12 words), supportive, non-judgmental. "
+        "No advice, no diagnosis, no medical language."
+    )
+
+    user_prompt = json.dumps(
+        {
+            "message": trimmed_message,
+            "mood": mood,
+            "time_budget": time_budget,
+            "keyphrases": keyphrases[:5],
+            "evidence": evidence_snippets,
+        }
+    )
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=model,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    except Exception:
+        logger.info("openai_cues_failed", extra={"reason": "openai_error"})
+        return None
+
+    output_text = getattr(response, "output_text", None) or ""
+    payload = _extract_json(output_text)
+    if not payload or "cues" not in payload:
+        logger.info("openai_cues_failed", extra={"reason": "invalid_json"})
+        return None
+
+    cues = payload.get("cues")
+    if not isinstance(cues, list):
+        logger.info("openai_cues_failed", extra={"reason": "invalid_schema"})
+        return None
+
+    cleaned = []
+    for cue in cues[:4]:
+        if not isinstance(cue, str):
+            continue
+        text = " ".join(cue.split())
+        if not text:
+            continue
+        if len(text.split()) > 12:
+            continue
+        if not _passes_policy_checks(text):
+            continue
+        cleaned.append(text)
+
+    if len(cleaned) < 2:
+        logger.info("openai_cues_failed", extra={"reason": "too_few_cues"})
+        return None
+
+    numbered = " ".join([f"{idx + 1}) {cue}" for idx, cue in enumerate(cleaned[:3])])
+    return f"Journal cues: {numbered}"

@@ -108,6 +108,19 @@ def _safe_time_budget(value: int) -> int:
     return value
 
 
+def _emotion_to_mood(emotion: str) -> str:
+    mapping = {
+        "sadness": "Sad",
+        "anger": "Irritated",
+        "fear": "Anxious",
+        "joy": "Happy",
+        "neutral": "Neutral",
+        "surprise": "Focused",
+        "disgust": "Stressed",
+    }
+    return mapping.get(emotion.lower(), "Neutral")
+
+
 def _handle_prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
     combined_text = " ".join(entry.text for entry in payload.recent_entries + payload.similar_entries)
     safety = detect_crisis(combined_text)
@@ -143,6 +156,7 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
 
     plan = build_reflection_plan(
         user_id=payload.user_id,
+        user_name=payload.user_name,
         selected_prompt=payload.selected_prompt or "",
         latest_user_message=message,
         retrieved_entries=merged_entries,
@@ -206,12 +220,16 @@ def analyze_entry(payload: AnalyzeEntryRequest) -> AnalyzeEntryResponse:
     keyphrases = extract_keyphrases(payload.text)
     embedding = embed_text(payload.text)
     safety = detect_crisis(payload.text)
+    emotion = get_emotion(payload.text)
+    mood_suggestion = _emotion_to_mood(emotion) if emotion else None
 
     return AnalyzeEntryResponse(
         sentiment={"label": sentiment_label, "score": sentiment_score},
         keyphrases=keyphrases,
         embedding=embedding,
         safety=safety,
+        emotion=emotion,
+        mood_suggestion=mood_suggestion,
     )
 
 
@@ -276,6 +294,7 @@ def chat_turn(payload: ChatTurnRequest) -> ChatTurnResponse:
     safety = detect_crisis(payload.latest_user_message)
     plan = build_reflection_plan(
         user_id=payload.user_id,
+        user_name=payload.user_name,
         selected_prompt=payload.selected_prompt,
         latest_user_message=payload.latest_user_message,
         retrieved_entries=payload.retrieved_entries,

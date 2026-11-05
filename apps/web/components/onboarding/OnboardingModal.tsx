@@ -18,14 +18,14 @@ import { useSessionStore } from "@/store/use-session-store";
 import { upsertProfile } from "@/lib/db/profiles";
 
 const onboardingSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters.").max(30),
+  name: z.string().min(3, "Name must be at least 3 characters.").max(30),
   age: z
     .string()
     .trim()
     .min(1, "Age is required.")
     .refine((value) => /^\d+$/.test(value), "Age must be a whole number.")
     .transform((value) => Number(value))
-    .refine((value) => value >= 13, "Age must be at least 13.")
+    .refine((value) => value >= 16, "Age must be at least 16.")
     .refine((value) => value <= 120, "Age must be 120 or less."),
   occupation: z.string().max(60, "Occupation must be 60 characters or less.").optional(),
 });
@@ -109,7 +109,7 @@ export default function OnboardingModal() {
 
   return (
     <Dialog open={open} onOpenChange={(next) => (profile ? setOpen(next) : setOpen(true))}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg bg-white text-black">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>

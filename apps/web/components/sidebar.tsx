@@ -66,7 +66,7 @@ export default function Sidebar({ activePath }: { activePath: string }) {
   };
 
   return (
-    <aside className="hidden h-screen w-64 flex-col border-r bg-background px-5 py-6 md:flex md:fixed md:inset-y-0">
+    <aside className="hidden h-screen w-64 flex-col border-r border-divider bg-sidebar px-5 py-6 md:flex md:fixed md:inset-y-0">
       <Logo />
       <nav className="mt-10 flex-1 space-y-2">
         {navItems.map((item) => {
@@ -77,18 +77,21 @@ export default function Sidebar({ activePath }: { activePath: string }) {
               key={item.label}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted/80 hover:text-foreground",
+                "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                 isActive && "bg-muted text-foreground"
               )}
             >
-              <Icon className="h-4 w-4" />
+              {isActive && (
+                <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-primary" />
+              )}
+              <Icon className={cn("h-4 w-4 transition-colors group-hover:text-foreground", isActive && "text-foreground")} />
               {item.label}
             </Link>
           );
         })}
       </nav>
       <div className="mt-auto">
-        <Button className="w-full gap-2" onClick={handleNewEntry} disabled={creating}>
+        <Button className="w-full gap-2 shadow-soft-gray" onClick={handleNewEntry} disabled={creating}>
           <Plus className="h-4 w-4" />
           {creating ? "Starting..." : "New Entry"}
         </Button>
