@@ -8,7 +8,7 @@ export default function CrisisResources() {
       <p>If you&apos;re in immediate danger, call your local emergency number.</p>
       <p>
         In the US, call or text <strong>988</strong> (Suicide &amp; Crisis Lifeline). Elsewhere,{" "}
-        <a href="https://findahelpline.com" target="_blank" rel="noreferrer" className="underline">
+        <a href="https://findahelpline.com" target="_blank" rel="noreferrer" className="underline underline-offset-2 transition-colors hover:text-foreground">
           findahelpline.com
         </a>{" "}
         lists free, confidential support lines.

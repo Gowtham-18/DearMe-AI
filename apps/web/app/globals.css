@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Tailwind v4 ignores tailwind.config.ts unless it is linked here; without this line every theme
+   utility (bg-primary, hover:bg-muted, text-muted-foreground, border-divider...) is silently dropped. */
+@config "../tailwind.config.ts";
 
 @layer base {
   :root {

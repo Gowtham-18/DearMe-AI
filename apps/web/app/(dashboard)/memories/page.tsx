@@ -75,7 +75,7 @@ export default function MemoriesPage() {
                 key={value ?? "all"}
                 size="sm"
                 variant="outline"
-                className={`h-8 rounded-full ${mood === value ? "bg-muted text-foreground" : "text-muted-foreground"}`}
+                className={`h-8 rounded-full ${mood === value ? "border-primary bg-primary text-primary-foreground hover:border-primary hover:bg-primary/85" : "text-muted-foreground"}`}
                 onClick={() => setMood(value)}
                 aria-pressed={mood === value}
               >
@@ -104,8 +104,8 @@ export default function MemoriesPage() {
                   {formatDisplayDate(entry.entry_date)}
                 </p>
               )}
-              <Link href={`/memories/${entry.id}`} className="block">
-                <Card className="p-4 transition hover:border-foreground/20">
+              <Link href={`/memories/${entry.id}`} className="group block rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+                <Card className="p-4 transition-[border-color,box-shadow] duration-150 group-hover:border-foreground/25 group-hover:shadow-hover-gray">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold">{entry.mood ?? "No mood"}</p>
                     <p className="text-xs text-muted-foreground">
@@ -113,7 +113,7 @@ export default function MemoriesPage() {
                     </p>
                   </div>
                   <p className="mt-2 line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">{entry.content}</p>
-                  <p className="mt-2 text-xs font-medium text-foreground">Read full entry →</p>
+                  <p className="mt-2 text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground">Read full entry →</p>
                 </Card>
               </Link>
             </div>
