@@ -1,0 +1,149 @@
+// Runs the Supabase migrations (docs/db, phases 1..6b) on PGlite with a Supabase-like auth stub and
+// checks the auth rollout: legacy anon data -> anonymous sign-in -> claim -> Row Level Security.
+// Usage: npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17 && node scripts/test-migrations.mjs . /tmp/pg
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const require = createRequire(join(process.argv[3], "package.json"));
+const { PGlite } = await import(pathToFileURL(require.resolve("@electric-sql/pglite")).href);
+const { vector } = await import(pathToFileURL(require.resolve("@electric-sql/pglite/vector")).href);
+
+const dbDir = join(process.argv[2], "docs", "db");
+const db = new PGlite({ extensions: { vector } });
+let failures = 0;
+const ok = (cond, msg) => {
+  console.log(`${cond ? "PASS" : "FAIL"}  ${msg}`);
+  if (!cond) failures++;
+};
+// PGlite has no pgcrypto; gen_random_uuid() is core since Postgres 13, so drop that line here only.
+const sql = (name) =>
+  readFileSync(join(dbDir, name), "utf8")
+    .replace(/^﻿/, "")
+    .replace(/create extension if not exists "pgcrypto";/gi, "");
+
+// Supabase-like environment
+await db.exec(`
+  create role anon nologin; create role authenticated nologin;
+  create schema auth;
+  create table auth.users (id uuid primary key);
+  create function auth.uid() returns uuid language sql stable as
+    $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  grant usage on schema public, auth to anon, authenticated;
+  grant select on auth.users to anon, authenticated;
+  alter default privileges in schema public grant all on tables to anon, authenticated;
+  alter default privileges in schema public grant all on sequences to anon, authenticated;
+  alter default privileges in schema public grant execute on functions to anon, authenticated;
+`);
+
+for (const file of ["schema.sql", "schema-phase2.sql", "schema-phase3.sql", "schema-phase4.sql", "schema-phase5.sql"]) {
+  await db.exec(sql(file));
+}
+ok(true, "phases 1-5 applied");
+
+const as = async (role, uid) => {
+  await db.exec(`reset role`);
+  await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [uid ?? ""]);
+  await db.exec(`set role ${role}`);
+};
+const vec = (axis) => `[${Array.from({ length: 384 }, (_, i) => (i === axis ? 1 : 0)).join(",")}]`;
+
+// Old app (anon key, no auth) writes data under a localStorage id
+const LEGACY = "6f1c2a44-1111-4c3b-9d7e-aaaaaaaaaaaa";
+const VICTIM_LEGACY = "6f1c2a44-2222-4c3b-9d7e-bbbbbbbbbbbb";
+await as("anon");
+await db.query(`insert into profiles (user_id, name, age) values ($1, 'Asha', 30), ($2, 'Ben', 40)`, [LEGACY, VICTIM_LEGACY]);
+const { rows: [s1] } = await db.query(
+  `insert into journal_sessions (user_id, entry_date, selected_prompt_id, selected_prompt_text) values ($1, current_date, 'p1', 'x') returning id`, [LEGACY]);
+const { rows: [e1] } = await db.query(
+  `insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'Deadline at work again') returning id`, [LEGACY]);
+await db.query(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'user', 'hello')`, [s1.id, LEGACY]);
+await db.query(`insert into journal_embeddings (user_id, entry_id, embedding) values ($1, $2, $3)`, [LEGACY, e1.id, vec(0)]);
+await db.query(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'Ben private entry')`, [VICTIM_LEGACY]);
+
+// Phase 6a while the old app is still live
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase6a-auth-prep.sql"));
+ok(true, "phase 6a applied on top of live data");
+await as("anon");
+const { rows: anonStill } = await db.query(`select count(*)::int as n from entries`);
+ok(anonStill[0].n === 2, "old app (anon) still works after 6a");
+let anonRpcBlocked = false;
+try { await db.query(`select claim_legacy_data($1)`, [LEGACY]); } catch { anonRpcBlocked = true; }
+ok(anonRpcBlocked, "anon cannot call claim_legacy_data");
+
+// New app: anonymous sign-in -> auth user A, claims its legacy id
+const A = "a0000000-0000-4000-8000-000000000001";
+const B = "b0000000-0000-4000-8000-000000000002";
+await db.exec(`reset role`);
+await db.query(`insert into auth.users (id) values ($1), ($2)`, [A, B]);
+await as("authenticated", A);
+const { rows: [claim] } = await db.query(`select claim_legacy_data($1) as moved`, [LEGACY]);
+ok(claim.moved >= 2, `claim moved ${claim.moved} entry/session rows to the signed-in user`);
+const { rows: [again] } = await db.query(`select claim_legacy_data($1) as moved`, [LEGACY]);
+ok(again.moved === 0, "a legacy id can only be claimed once");
+const { rows: [selfClaim] } = await db.query(`select claim_legacy_data($1) as moved`, [B]);
+ok(selfClaim.moved === 0, "cannot claim a real auth user's id");
+const { rows: [prof] } = await db.query(`select name from profiles where user_id = $1`, [A]);
+ok(prof?.name === "Asha", "profile moved to the new account");
+
+// New columns + per-session entry uniqueness
+const { rows: [s2] } = await db.query(
+  `insert into journal_sessions (user_id, entry_date, selected_prompt_id, selected_prompt_text, mood, time_budget) values ($1, current_date, 'p2', 'y', 'Calm', 7) returning id, mood, time_budget`, [A]);
+ok(s2.mood === "Calm" && s2.time_budget === 7, "sessions store mood and time budget");
+await db.query(`insert into entries (user_id, entry_date, time_budget, content, session_id) values ($1, current_date, 7, 'second entry today', $2)`, [A, s2.id]);
+let dupBlocked = false;
+try { await db.query(`insert into entries (user_id, entry_date, time_budget, content, session_id) values ($1, current_date, 7, 'dup', $2)`, [A, s2.id]); } catch { dupBlocked = true; }
+ok(dupBlocked, "one entry per session (second entry of the day no longer overwrites the first)");
+
+// Phase 6b: RLS
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase6b-rls.sql"));
+ok(true, "phase 6b applied");
+
+await as("anon");
+let anonBlocked = false;
+try { const r = await db.query(`select count(*)::int as n from entries`); anonBlocked = r.rows[0].n === 0; } catch { anonBlocked = true; }
+ok(anonBlocked, "anon (signed out) can no longer read journals");
+
+await as("authenticated", B);
+const { rows: bSees } = await db.query(`select count(*)::int as n from entries`);
+ok(bSees[0].n === 0, "user B sees none of A's entries");
+let spoofBlocked = false;
+try { await db.query(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'spoof')`, [A]); } catch { spoofBlocked = true; }
+ok(spoofBlocked, "user B cannot write rows as user A");
+const { rowCount: bDel } = await db.query(`delete from entries where user_id = $1`, [A]);
+ok((bDel ?? 0) === 0, "user B cannot delete A's entries");
+const { rows: bMatch } = await db.query(`select * from match_journal_entries($1, $2, 5)`, [A, vec(0)]);
+ok(bMatch.length === 0, "vector search with A's id returns nothing for B");
+const { rows: bRate } = await db.query(`select check_rate_limit('chat', 2, 60) as a, check_rate_limit('chat', 2, 60) as b, check_rate_limit('chat', 2, 60) as c`);
+ok(bRate[0].a && bRate[0].b && !bRate[0].c, "rate limit allows 2 then blocks the 3rd");
+
+await as("authenticated", A);
+const { rows: aSees } = await db.query(`select count(*)::int as n from entries`);
+ok(aSees[0].n === 2, "user A sees exactly their 2 entries");
+const { rows: aMatch } = await db.query(`select * from match_journal_entries($1, $2, 5)`, [A, vec(0)]);
+ok(aMatch.length === 1 && aMatch[0].similarity > 0.99, "vector search works for the owner");
+
+const themes = JSON.stringify([
+  { id: "c0000000-0000-4000-8000-0000000000c1", label: "Work", keywords: ["work"], strength: 1, members: [{ entry_id: e1.id, score: 0.9 }] },
+]);
+const { rows: [rt] } = await db.query(`select replace_user_themes($1::jsonb) as n`, [themes]);
+const { rows: tm } = await db.query(`select count(*)::int as n from theme_membership`);
+ok(rt.n === 1 && tm[0].n === 1, "replace_user_themes writes themes + membership atomically");
+let badTheme = false;
+try { await db.query(`select replace_user_themes($1::jsonb)`, [`[{"id":"not-a-uuid","label":"x"}]`]); } catch { badTheme = true; }
+const { rows: tAfter } = await db.query(`select count(*)::int as n from themes`);
+ok(badTheme && tAfter[0].n === 1, "a failed theme rebuild rolls back and keeps the old themes");
+
+await db.query(`select delete_my_data(true)`);
+const counts = await db.query(`select (select count(*) from entries)::int e, (select count(*) from journal_sessions)::int s, (select count(*) from profiles)::int p, (select count(*) from themes)::int t`);
+ok(Object.values(counts.rows[0]).every((n) => n === 0), "delete_my_data removes everything for the user");
+
+await db.exec(`reset role`);
+const { rows: ben } = await db.query(`select count(*)::int as n from entries where user_id = $1`, [VICTIM_LEGACY]);
+ok(ben[0].n === 1, "other users' (unclaimed) data untouched");
+
+console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
+process.exit(failures ? 1 : 0);
