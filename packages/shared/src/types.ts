@@ -100,6 +100,7 @@ export interface GeneratePromptsResponse {
     id: string;
     text: string;
     reason: string;
+    example?: string | null;
     evidence: Array<{ entry_id?: string | null; snippet: string; reason: string }>;
   }>;
   safety: SafetyResult;

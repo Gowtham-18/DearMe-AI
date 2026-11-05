@@ -157,6 +157,7 @@ def _handle_prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
         themes=payload.themes,
         mood=payload.mood,
         time_budget=time_budget,
+        today=payload.today,
     )
     rationale = PromptRationale(themes_used=payload.themes[:3], mood_used=payload.mood, time_budget_used=time_budget)
     return PromptsResponseV1(prompts=prompts, rationale=rationale, safety=safety)

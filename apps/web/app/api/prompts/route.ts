@@ -3,23 +3,9 @@ import { promptsBodySchema, promptsV1ResponseSchema } from "@dearme/shared";
 
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, serializeEmbedding } from "@/lib/nlp";
+import { buildFallbackPrompts } from "@/lib/prompts";
 
 export const maxDuration = 30;
-
-const buildFallbackPrompts = (mood: string | null, timeBudget: number) => {
-  const moodHint = mood ? `while feeling ${mood.toLowerCase()}` : "today";
-  return [
-    `With ${timeBudget} minutes, what feels most important to name right now?`,
-    `What moment from ${moodHint} stands out?`,
-    "What do you want to release before the day ends?",
-    "What small win do you want to remember?",
-  ].map((text, index) => ({
-    id: `starter_${index + 1}`,
-    text,
-    reason: "Starter prompt to help you begin.",
-    evidence: [],
-  }));
-};
 
 export async function POST(req: Request) {
   const ctx = await getRequestContext(req);
@@ -29,6 +15,7 @@ export async function POST(req: Request) {
   const parsed = promptsBodySchema.safeParse(await req.json().catch(() => ({})));
   const mood = parsed.success ? parsed.data.mood ?? null : null;
   const timeBudget = parsed.success ? parsed.data.timeBudget ?? 5 : 5;
+  const today = parsed.success ? parsed.data.today ?? null : null;
   const fallback = () =>
     NextResponse.json({ prompts: buildFallbackPrompts(mood, timeBudget), safety: { crisis: false, reason: null } });
 
@@ -37,7 +24,7 @@ export async function POST(req: Request) {
   const [{ data: recentEntries }, { data: lastEmbedding }, { data: themes }] = await Promise.all([
     supabase
       .from("entries")
-      .select("id, content, created_at, mood")
+      .select("id, content, created_at, entry_date, mood")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(5),
@@ -81,10 +68,12 @@ export async function POST(req: Request) {
       user_id: user.id,
       mood,
       time_budget_min: timeBudget,
+      today,
       recent_entries: (recentEntries ?? []).map((entry) => ({
         entry_id: entry.id,
         text: entry.content,
         created_at: entry.created_at,
+        entry_date: entry.entry_date,
         mood: entry.mood,
         source: "recent",
       })),

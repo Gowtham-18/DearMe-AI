@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import (
@@ -379,18 +380,123 @@ def _short_reply_plan(text: str, safety: dict) -> Optional[ReflectionPlan]:
 
 
 def _starter_prompts(mood: Optional[str], time_budget: int) -> List[PromptItem]:
-    mood_hint = f"while feeling {mood.lower()}" if mood else "today"
-    depth_hint = "briefly" if time_budget <= 5 else "with a little detail"
-    base = [
-        f"With {time_budget} minutes, what feels most important to name {depth_hint}?",
-        f"What moment from {mood_hint} stands out, and what did it mean to you?",
-        "What do you want to release or set down before the day ends?",
-        "What small win do you want to remember, even if it felt ordinary?",
-    ]
+    """Concrete openers for people with no history yet. Each has an example answer to lower the bar."""
+    pace = "A few lines is plenty." if time_budget <= 5 else "Take your time and add detail."
+    if mood:
+        first = PromptItem(
+            id="starter_1",
+            text=f'You picked "{mood}". What happened today that fits that feeling?',
+            reason=f"Starts from your mood. {pace}",
+            example=f"e.g. I felt {mood.lower()} after the meeting ran late and I missed my workout.",
+        )
+    else:
+        first = PromptItem(
+            id="starter_1",
+            text="What's one moment from today that stands out, and why does it stick with you?",
+            reason=f"One specific moment is easier than the whole day. {pace}",
+            example="e.g. Lunch with an old friend. It was the first proper laugh I've had all week.",
+        )
     return [
-        PromptItem(id=f"starter_{index + 1}", text=text, reason="Starter prompt to help you begin.", evidence=[])
-        for index, text in enumerate(base[:4])
+        first,
+        PromptItem(
+            id="starter_2",
+            text="What's taking up the most space in your head right now?",
+            reason=f"Name the loudest thought first. {pace}",
+            example="e.g. The presentation on Friday. I keep rehearsing it while I'm trying to sleep.",
+        ),
+        PromptItem(
+            id="starter_3",
+            text="What drained your energy today, and what gave some of it back?",
+            reason="Helps you spot patterns over time.",
+            example="e.g. Back-to-back calls drained me. The walk after dinner helped.",
+        ),
+        PromptItem(
+            id="starter_4",
+            text="What's one small thing that went right today?",
+            reason="Small wins are easy to forget and good to look back on.",
+            example="e.g. I finally replied to the email I'd been avoiding for a week.",
+        ),
     ]
+
+
+# A sample answer per life area, so a prompt about "work" shows what a concrete answer looks like.
+AREA_EXAMPLES = {
+    "health": "e.g. My back has been sore all week and it's making me short with people.",
+    "sleep": "e.g. I've been up past 1am scrolling, then dragging myself through the morning.",
+    "work": "e.g. My manager liked the report, but I still feel behind on everything else.",
+    "study": "e.g. The exam is in two weeks and I haven't started the hardest chapter.",
+    "family": "e.g. Mum called and we argued about the trip again. I wish I'd said it differently.",
+    "relationship": "e.g. We barely talked this week. I miss how easy it used to feel.",
+    "friends": "e.g. I haven't heard from the group in a while and I'm not sure who should reach out.",
+    "money": "e.g. Rent went up and I keep checking my account before buying anything.",
+    "loss": "e.g. I saw something that reminded me of them today and had to stop for a minute.",
+    "self": "e.g. I keep comparing myself to people at work and coming up short.",
+    "future": "e.g. I don't know if I want to stay in this city next year.",
+}
+_GENERIC_EXAMPLE = "e.g. It came up again today when I was on my way home."
+_DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _parse_day(value: Optional[str]) -> Optional[date]:
+    """A calendar day from 'YYYY-MM-DD' or an ISO timestamp (timestamps are read in UTC)."""
+    if not value:
+        return None
+    try:
+        if len(value) == 10:
+            return date.fromisoformat(value)
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(timezone.utc)
+    return stamp.date()
+
+
+def _when_phrase(entry_day: Optional[str], today: Optional[str] = None) -> str:
+    """'Yesterday', 'On Tuesday' or 'In your last entry'. Both days should be in the person's calendar."""
+    day = _parse_day(entry_day)
+    if day is None:
+        return "In your last entry"
+    current = _parse_day(today) or datetime.now(timezone.utc).date()
+    days = (current - day).days
+    if days < 0:
+        return "In your last entry"
+    if days == 0:
+        return "Earlier today"
+    if days == 1:
+        return "Yesterday"
+    if days < 7:
+        return f"On {_DAY_NAMES[day.weekday()]}"
+    return "In your last entry"
+
+
+def _follow_up_prompt(
+    recent_entries: Sequence[ContextEntry], today: Optional[str] = None
+) -> Optional[Tuple[PromptItem, str]]:
+    """Pick up where the person left off: their latest entry about a life area, and how they felt then.
+
+    Returns the prompt and the life-area key it follows up on.
+    """
+    for entry in recent_entries[:3]:
+        area = detect_area(entry.text)
+        if not area:
+            continue
+        feeling = (entry.mood or "").strip().lower() or _infer_feeling(entry.text)
+        when = _when_phrase(entry.entry_date or entry.created_at, today)
+        if area.key == "loss":
+            text = f"{when} you wrote about a loss. How are you carrying it today?"
+        else:
+            felt = f" and felt {feeling}" if feeling and feeling != "neutral" else ""
+            text = f"{when} you wrote about {AREA_TOPICS[area.key]}{felt}. Has anything shifted since then?"
+        prompt = PromptItem(
+            id="prompt_follow_up",
+            text=text,
+            reason="Following up on your last entry.",
+            example="e.g. A bit better than last time, but it still catches me off guard some days.",
+            evidence=[PromptEvidence(entry_id=entry.entry_id, snippet=_snippet(entry.text), reason="What you wrote last time.")],
+        )
+        return prompt, area.key
+    return None
 
 
 _TOPIC_AREA = {topic: key for key, topic in AREA_TOPICS.items()}
@@ -416,6 +522,7 @@ def build_prompts(
     themes: List[str],
     mood: Optional[str],
     time_budget: int,
+    today: Optional[str] = None,
 ) -> List[PromptItem]:
     combined = {entry.entry_id: entry for entry in recent_entries + similar_entries}
     combined_entries = list(combined.values())
@@ -433,7 +540,7 @@ def build_prompts(
          for nouns in [determined_nouns(entry.text)] if nouns),
         None,
     )
-    if not topics and not moment:
+    if not topics and not moment and not _follow_up_prompt(recent_entries, today):
         return _starter_prompts(mood, time_budget)
 
     mood_hint = f"feeling {mood.lower()}" if mood else "right now"
@@ -454,12 +561,18 @@ def build_prompts(
     rng.shuffle(templates)
 
     prompts: List[PromptItem] = []
+    follow_up = _follow_up_prompt(recent_entries, today)
+    if follow_up:
+        prompt, followed_key = follow_up
+        prompts.append(prompt)
+        topics = [topic for topic in topics if _TOPIC_AREA.get(topic) != followed_key]
     if mood:
         prompts.append(
             PromptItem(
                 id="prompt_mood",
                 text=f"When you're feeling {mood.lower()}, what helps you feel a little steadier?",
                 reason="Tailored to your current mood.",
+                example="e.g. A short walk, texting my sister, or putting my phone in another room.",
                 evidence=[],
             )
         )
@@ -475,6 +588,7 @@ def build_prompts(
                 id=f"prompt_{index + 1}",
                 text=text,
                 reason=f"Based on recent patterns around {topic}." if evidence_entries else "Grounded in your recent reflections.",
+                example=AREA_EXAMPLES.get(_TOPIC_AREA.get(topic, ""), _GENERIC_EXAMPLE),
                 evidence=[
                     PromptEvidence(entry_id=entry.entry_id, snippet=_snippet(entry.text), reason="Mentioned in a recent entry.")
                     for entry in evidence_entries
@@ -490,6 +604,7 @@ def build_prompts(
                 id="prompt_moment",
                 text=f"You wrote about {phrase} recently. What's stayed with you since then?",
                 reason="From a recent entry.",
+                example="e.g. I keep coming back to it, especially when the house is quiet.",
                 evidence=[PromptEvidence(entry_id=entry.entry_id, snippet=_snippet(entry.text), reason="Your recent entry.")],
             )
         )
