@@ -1,87 +1,112 @@
+import hmac
 import logging
 import os
 import uuid
 from typing import Dict
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
-from .models import (
+load_dotenv()
+
+from fastapi import FastAPI, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+from .companion import build_prompts, build_reflection_plan, render_plan_to_message  # noqa: E402
+from .models import (  # noqa: E402
     AnalyzeEntryRequest,
     AnalyzeEntryResponse,
     ChatTurnRequest,
-    ChatTurnResponse,
     ChatTurnRequestV1,
+    ChatTurnResponse,
     ChatTurnResponseV1,
+    EmbedRequest,
+    EmbedResponse,
     ExtractedData,
     GeneratePromptsRequest,
     GeneratePromptsResponse,
+    PromptRationale,
     PromptsRequestV1,
     PromptsResponseV1,
-    PromptRationale,
     RecomputeThemesRequest,
     RecomputeThemesResponse,
     WeeklyReflectionRequest,
     WeeklyReflectionResponse,
 )
-from .pipeline import (
+from .openai_rewriter import llm_available, rewrite_plan  # noqa: E402
+from .pipeline import (  # noqa: E402
+    SENTIMENT_SOURCE,
+    analyze_affect,
     embed_text,
     extract_keyphrases,
-    get_keybert,
-    get_sentiment,
-    get_sentiment_pipeline,
     get_embedding_model,
-    get_emotion,
     get_emotion_pipeline,
+    get_keybert,
+    get_sentiment_pipeline,
+    models_status,
 )
-from .companion import build_prompts, build_reflection_plan, render_plan_to_message
-from .openai_rewriter import rewrite_plan
-from .safety import detect_crisis
-from .themes import recompute_themes
-from .weekly import build_weekly_reflection
-
-load_dotenv()
+from .safety import detect_crisis  # noqa: E402
+from .themes import recompute_themes  # noqa: E402
+from .weekly import build_weekly_reflection  # noqa: E402
 
 logger = logging.getLogger("nlp-service")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "400"))
+MAX_ANALYZE_CHARS = int(os.getenv("MAX_ANALYZE_CHARS", "6000"))
 MAX_ENTRIES_PER_REQUEST = int(os.getenv("MAX_ENTRIES_PER_REQUEST", "12"))
+MAX_THEME_ENTRIES = int(os.getenv("MAX_THEME_ENTRIES", "200"))
+INTERNAL_TOKEN = os.getenv("NLP_INTERNAL_TOKEN", "")
 
-app = FastAPI(title="DearMe NLP Service", version="0.3.0")
+app = FastAPI(
+    title="DearMe NLP Service",
+    version="0.4.0",
+    docs_url=None if INTERNAL_TOKEN else "/docs",
+    redoc_url=None,
+    openapi_url=None if INTERNAL_TOKEN else "/openapi.json",
+)
 
-cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin]
+cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
 if cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-Internal-Token"],
     )
+
+
+@app.middleware("http")
+async def require_internal_token(request: Request, call_next):
+    """Only the web tier (which holds the shared secret) may call the analysis endpoints."""
+    if INTERNAL_TOKEN and request.method == "POST":
+        supplied = request.headers.get("x-internal-token", "")
+        if not hmac.compare_digest(supplied.encode(), INTERNAL_TOKEN.encode()):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 @app.on_event("startup")
 def warm_models() -> None:
-    try:
-        get_embedding_model()
+    if not INTERNAL_TOKEN:
+        logger.warning("NLP_INTERNAL_TOKEN is not set: POST endpoints are open to anyone.")
+    get_embedding_model()
+    get_emotion_pipeline()
+    get_keybert()
+    if SENTIMENT_SOURCE == "transformer":
         get_sentiment_pipeline()
-        get_emotion_pipeline()
-        get_keybert()
-        logger.info("NLP models loaded")
-    except Exception:
-        logger.warning("NLP models failed to load, falling back where possible.")
+    logger.info("models ready status=%s llm_available=%s", models_status(), llm_available())
 
 
 @app.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health() -> Dict[str, object]:
+    return {"status": "ok", "models": models_status()}
 
 
 @app.get("/")
 def root() -> Dict[str, str]:
-    return {"status": "ok", "docs": "/docs"}
+    return {"status": "ok"}
 
 
 def _merge_entries(*entry_lists):
@@ -101,11 +126,7 @@ def _limit_entries(entries):
 
 
 def _safe_time_budget(value: int) -> int:
-    if value <= 3:
-        return 3
-    if value >= 10:
-        return 10
-    return value
+    return min(10, max(3, value))
 
 
 def _emotion_to_mood(emotion: str) -> str:
@@ -124,10 +145,10 @@ def _emotion_to_mood(emotion: str) -> str:
 def _handle_prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
     combined_text = " ".join(entry.text for entry in payload.recent_entries + payload.similar_entries)
     safety = detect_crisis(combined_text)
+    time_budget = _safe_time_budget(payload.time_budget_min)
     if safety.get("crisis"):
         return PromptsResponseV1(prompts=[], safety=safety)
 
-    time_budget = _safe_time_budget(payload.time_budget_min)
     prompts = build_prompts(
         user_id=payload.user_id,
         recent_entries=_limit_entries(payload.recent_entries),
@@ -136,67 +157,58 @@ def _handle_prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
         mood=payload.mood,
         time_budget=time_budget,
     )
-
-    rationale = PromptRationale(
-        themes_used=payload.themes[:3],
-        mood_used=payload.mood,
-        time_budget_used=time_budget,
-    )
-
+    rationale = PromptRationale(themes_used=payload.themes[:3], mood_used=payload.mood, time_budget_used=time_budget)
     return PromptsResponseV1(prompts=prompts, rationale=rationale, safety=safety)
 
 
 def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
-    request_id = uuid.uuid4().hex
+    request_id = uuid.uuid4().hex[:12]
     message = payload.user_message.strip()[:MAX_TEXT_LENGTH]
     safety = detect_crisis(message)
-
-    merged_entries = _merge_entries(payload.retrieved_entries, payload.recent_entries)
-    merged_entries = _limit_entries(merged_entries)
+    allow_llm = bool(payload.enhanced_language)
 
     plan = build_reflection_plan(
         user_id=payload.user_id,
         user_name=payload.user_name,
         selected_prompt=payload.selected_prompt or "",
         latest_user_message=message,
-        retrieved_entries=merged_entries,
+        retrieved_entries=_limit_entries(_merge_entries(payload.retrieved_entries, payload.recent_entries)),
         time_budget=_safe_time_budget(payload.time_budget_min),
         mood=payload.mood,
         safety=safety,
-        history=payload.history,
+        history=payload.history[-12:],
+        allow_llm=allow_llm,
     )
 
     rendered = render_plan_to_message(plan)
-    mode = "deterministic"
-
-    if payload.enhanced_language and not plan.safety.crisis:
-        rewritten = rewrite_plan(plan, plan.evidence_cards, plan.constraints)
+    mode = "enhanced" if (plan.signals or {}).get("llm_cues") else "deterministic"
+    if allow_llm and not plan.safety.crisis:
+        rewritten = rewrite_plan(plan, plan.evidence_cards, plan.constraints, user_id=payload.user_id)
         if rewritten:
             rendered = rewritten
             mode = "enhanced"
 
-    sentiment_label, sentiment_score = get_sentiment(message)
-    emotion = get_emotion(message)
-    keyphrases = extract_keyphrases(message, top_n=5)
-
-    assistant_message = " ".join(
-        [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge]
-    ).strip()
+    signals = plan.signals or {}
+    sentiment = signals.get("sentiment") or {"label": "neutral", "score": 0.0}
+    keyphrases = signals.get("keyphrases") or []
+    emotion = signals.get("emotion")
 
     logger.info(
-        "chat_turn request_id=%s user_id=%s chat_id=%s msg_len=%s mode=%s",
+        "chat_turn request_id=%s user_id=%s msg_len=%s mode=%s crisis=%s",
         request_id,
         payload.user_id,
-        payload.chat_id,
         len(message),
         mode,
+        plan.safety.crisis,
     )
 
     return ChatTurnResponseV1(
-        assistant_message=assistant_message,
+        assistant_message=" ".join(
+            [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge]
+        ).strip(),
         follow_up_question=rendered.follow_up_question,
         extracted=ExtractedData(
-            sentiment={"label": sentiment_label, "score": sentiment_score},
+            sentiment=sentiment,
             emotions=[emotion] if emotion else [],
             themes=keyphrases[:3],
             keyphrases=keyphrases,
@@ -207,36 +219,41 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
     )
 
 
+@app.post("/v1/embed", response_model=EmbedResponse)
+def embed(payload: EmbedRequest) -> EmbedResponse:
+    embedding = embed_text(payload.text[:MAX_ANALYZE_CHARS])
+    if embedding is None:
+        return EmbedResponse(embedding=[], degraded=["embedding_unavailable"])
+    return EmbedResponse(embedding=embedding)
+
+
 @app.post("/analyze-entry", response_model=AnalyzeEntryResponse)
 def analyze_entry(payload: AnalyzeEntryRequest) -> AnalyzeEntryResponse:
-    logger.info(
-        "analyze_entry user_id=%s entry_id=%s text_len=%s",
-        payload.user_id,
-        payload.entry_id,
-        len(payload.text),
-    )
+    text = payload.text[:MAX_ANALYZE_CHARS]
+    logger.info("analyze_entry user_id=%s entry_id=%s text_len=%s", payload.user_id, payload.entry_id, len(payload.text))
 
-    sentiment_label, sentiment_score = get_sentiment(payload.text)
-    keyphrases = extract_keyphrases(payload.text)
-    embedding = embed_text(payload.text)
-    safety = detect_crisis(payload.text)
-    emotion = get_emotion(payload.text)
-    mood_suggestion = _emotion_to_mood(emotion) if emotion else None
+    affect = analyze_affect(text)
+    embedding = embed_text(text)
+    degraded = list(affect.degraded)
+    if embedding is None:
+        degraded.append("embedding_unavailable")
 
     return AnalyzeEntryResponse(
-        sentiment={"label": sentiment_label, "score": sentiment_score},
-        keyphrases=keyphrases,
-        embedding=embedding,
-        safety=safety,
-        emotion=emotion,
-        mood_suggestion=mood_suggestion,
+        sentiment={"label": affect.sentiment_label, "score": affect.sentiment_score},
+        keyphrases=extract_keyphrases(text),
+        embedding=embedding or [],
+        safety=detect_crisis(payload.text),
+        emotion=affect.emotion,
+        mood_suggestion=_emotion_to_mood(affect.emotion) if affect.emotion_confidence >= 0.4 else None,
+        degraded=degraded,
     )
 
 
 @app.post("/recompute-themes", response_model=RecomputeThemesResponse)
 def recompute_themes_handler(payload: RecomputeThemesRequest) -> RecomputeThemesResponse:
-    logger.info("recompute_themes user_id=%s entries=%s", payload.user_id, len(payload.entries))
-    themes = recompute_themes([entry.model_dump() for entry in payload.entries])
+    entries = payload.entries[:MAX_THEME_ENTRIES]
+    logger.info("recompute_themes user_id=%s entries=%s", payload.user_id, len(entries))
+    themes = recompute_themes([entry.model_dump() for entry in entries])
     return RecomputeThemesResponse(themes=themes)
 
 
@@ -245,75 +262,53 @@ def weekly_reflection(payload: WeeklyReflectionRequest) -> WeeklyReflectionRespo
     logger.info("weekly_reflection user_id=%s entries=%s", payload.user_id, len(payload.entries))
     if not payload.entries:
         return WeeklyReflectionResponse(
-            summary_blocks=[],
-            evidence_cards=[],
-            prompts_next_week=[],
-            safety={"crisis": False, "reason": None},
+            summary_blocks=[], evidence_cards=[], prompts_next_week=[], safety={"crisis": False, "reason": None}
         )
     safety = detect_crisis(" ".join(entry.text for entry in payload.entries))
-    reflection = build_weekly_reflection(
-        [entry.model_dump() for entry in payload.entries],
-        payload.themes or [],
-        safety,
-    )
+    reflection = build_weekly_reflection([entry.model_dump() for entry in payload.entries], payload.themes or [], safety)
     return WeeklyReflectionResponse(**reflection)
 
 
 @app.post("/generate-prompts", response_model=GeneratePromptsResponse)
 def generate_prompts_handler(payload: GeneratePromptsRequest) -> GeneratePromptsResponse:
-    logger.info(
-        "generate_prompts user_id=%s recent=%s similar=%s",
-        payload.user_id,
-        len(payload.recent_entries),
-        len(payload.similar_entries),
-    )
+    """Legacy contract; kept for compatibility with older web builds."""
     combined_text = " ".join(entry.text for entry in payload.recent_entries + payload.similar_entries)
     safety = detect_crisis(combined_text)
     if safety.get("crisis"):
         return GeneratePromptsResponse(prompts=[], safety=safety)
-
     prompts = build_prompts(
         user_id=payload.user_id,
-        recent_entries=payload.recent_entries,
-        similar_entries=payload.similar_entries,
+        recent_entries=_limit_entries(payload.recent_entries),
+        similar_entries=_limit_entries(payload.similar_entries),
         themes=payload.themes,
         mood=payload.mood,
-        time_budget=payload.time_budget,
+        time_budget=_safe_time_budget(payload.time_budget),
     )
     return GeneratePromptsResponse(prompts=prompts, safety=safety)
 
 
 @app.post("/chat-turn", response_model=ChatTurnResponse)
 def chat_turn(payload: ChatTurnRequest) -> ChatTurnResponse:
-    logger.info(
-        "chat_turn user_id=%s session_id=%s msg_len=%s",
-        payload.user_id,
-        payload.session_id,
-        len(payload.latest_user_message),
-    )
-    safety = detect_crisis(payload.latest_user_message)
+    """Legacy contract; kept for compatibility with older web builds."""
+    message = payload.latest_user_message.strip()[:MAX_TEXT_LENGTH]
+    safety = detect_crisis(message)
     plan = build_reflection_plan(
         user_id=payload.user_id,
         user_name=payload.user_name,
         selected_prompt=payload.selected_prompt,
-        latest_user_message=payload.latest_user_message,
-        retrieved_entries=payload.retrieved_entries,
-        time_budget=payload.time_budget,
+        latest_user_message=message,
+        retrieved_entries=_limit_entries(payload.retrieved_entries),
+        time_budget=_safe_time_budget(payload.time_budget),
         mood=payload.mood,
         safety=safety,
+        history=payload.history[-12:],
     )
-    assistant_message = render_plan_to_message(plan)
-    return ChatTurnResponse(plan=plan, assistant_message=assistant_message, safety=safety)
+    return ChatTurnResponse(plan=plan, assistant_message=render_plan_to_message(plan), safety=plan.safety)
 
 
 @app.post("/v1/prompts", response_model=PromptsResponseV1)
 def prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
-    logger.info(
-        "prompts_v1 user_id=%s recent=%s similar=%s",
-        payload.user_id,
-        len(payload.recent_entries),
-        len(payload.similar_entries),
-    )
+    logger.info("prompts_v1 user_id=%s recent=%s similar=%s", payload.user_id, len(payload.recent_entries), len(payload.similar_entries))
     return _handle_prompts_v1(payload)
 
 

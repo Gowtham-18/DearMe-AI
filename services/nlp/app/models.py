@@ -30,6 +30,16 @@ class AnalyzeEntryResponse(BaseModel):
     safety: SafetyResult
     emotion: Optional[str] = None
     mood_suggestion: Optional[str] = None
+    degraded: List[str] = Field(default_factory=list)
+
+
+class EmbedRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=10000)
+
+
+class EmbedResponse(BaseModel):
+    embedding: List[float]
+    degraded: List[str] = Field(default_factory=list)
 
 
 class ThemeMember(BaseModel):
@@ -49,8 +59,9 @@ class ThemeResult(BaseModel):
 
 class ThemeEntry(BaseModel):
     entry_id: str
-    text: str
+    text: str = ""
     embedding: List[float]
+    keyphrases: Optional[List[str]] = None
 
 
 class RecomputeThemesRequest(BaseModel):
@@ -66,6 +77,7 @@ class WeeklyEntry(BaseModel):
     entry_id: str
     text: str
     created_at: str
+    entry_date: Optional[str] = None
     mood: Optional[str] = None
     sentiment: Optional[SentimentResult] = None
     keyphrases: List[str] = []
@@ -102,6 +114,7 @@ class ContextEntry(BaseModel):
     created_at: Optional[str] = None
     mood: Optional[str] = None
     source: Optional[str] = None
+    similarity: Optional[float] = None
 
 
 class PromptEvidence(BaseModel):
@@ -199,6 +212,7 @@ class ReflectionPlan(BaseModel):
     evidence_cards: List[EvidenceCard] = Field(default_factory=list)
     safety: SafetyResult
     constraints: PlanConstraints = Field(default_factory=PlanConstraints)
+    signals: Optional[dict] = None
 
 
 class RenderedMessage(BaseModel):

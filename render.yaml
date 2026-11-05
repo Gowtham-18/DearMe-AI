@@ -4,8 +4,27 @@
     runtime: python
     rootDir: services/nlp
     plan: free
-    buildCommand: pip install --upgrade pip && pip install --only-binary=:all: -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # CPU-only torch first: the default PyPI wheel on Linux pulls ~2 GB of CUDA libraries.
+    buildCommand: >-
+      pip install --upgrade pip &&
+      pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu &&
+      pip install --only-binary=:all: -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: NLP_INTERNAL_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SENTIMENT_SOURCE
+        value: emotion
+      - key: NLP_LOW_MEMORY
+        value: "false"
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: ENABLE_ENHANCED_LANGUAGE
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
