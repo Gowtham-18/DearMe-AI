@@ -112,7 +112,7 @@ export default function JournalSidebar() {
                   }}
                   className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-2xl"
                 >
-                  <Card className="group cursor-pointer p-4 transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-hover-gray">
+                  <Card className="group cursor-pointer p-4 transition-[border-color,box-shadow] duration-150 hover:border-foreground/25 hover:shadow-hover-gray">
                     <div className="flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium">

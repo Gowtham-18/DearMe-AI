@@ -108,7 +108,7 @@ export default function MemoryDetailPage() {
                     variant="ghost"
                     role="tab"
                     aria-selected={view === value}
-                    className={`h-8 rounded-full px-3 ${view === value ? "bg-muted text-foreground" : ""}`}
+                    className={`h-8 rounded-full px-3 ${view === value ? "bg-foreground/[0.08] text-foreground" : ""}`}
                     onClick={() => setView(value)}
                   >
                     {value === "entry" ? "Your entry" : "Full conversation"}
@@ -189,7 +189,7 @@ export default function MemoryDetailPage() {
 
 function BackLink() {
   return (
-    <Link href="/memories" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+    <Link href="/memories" className="inline-flex items-center gap-2 rounded-md text-sm text-muted-foreground transition-colors hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       Back to memories
     </Link>

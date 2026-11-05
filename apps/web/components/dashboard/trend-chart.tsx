@@ -89,7 +89,7 @@ export default function TrendChart({
               variant="ghost"
               role="tab"
               aria-selected={range === value}
-              className={cn("h-8 rounded-full px-3 text-xs", range === value && "bg-muted text-foreground")}
+              className={cn("h-8 rounded-full px-3 text-xs", range === value && "bg-foreground/[0.08] text-foreground")}
               onClick={() => setRange(value)}
             >
               {value === "7d" ? "7 days" : "30 days"}

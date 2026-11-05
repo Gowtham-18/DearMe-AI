@@ -42,8 +42,8 @@ export default function RecentReflections({ entries }: RecentReflectionsProps) {
       </div>
       <div className="flex gap-4 overflow-x-auto pb-2">
         {entries.map((item) => (
-          <Link key={item.id} href={`/memories/${item.id}`} className="min-w-[240px] flex-1">
-            <Card className="h-full transition hover:border-foreground/20">
+          <Link key={item.id} href={`/memories/${item.id}`} className="min-w-[240px] flex-1 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+            <Card className="h-full transition-[border-color,box-shadow] duration-150 hover:border-foreground/25 hover:shadow-hover-gray">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">{formatDisplayDate(item.entry_date)}</CardTitle>
                 <p className="text-xs text-muted-foreground">{item.mood ?? "No mood"}</p>
