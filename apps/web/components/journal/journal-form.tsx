@@ -13,6 +13,7 @@ import { formatLocalDate } from "@/lib/date";
 import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
 import { createSession, createTurn } from "@/lib/db/sessions";
+import { markMemoryFollowedUp, memoryIdFromPrompt } from "@/lib/db/memories";
 import { apiFetch } from "@/lib/auth";
 import CrisisResources from "@/components/crisis-resources";
 
@@ -110,6 +111,10 @@ export default function JournalForm({ variant = "page", onStarted }: JournalForm
       role: "assistant",
       content: prompt.text,
     });
+
+    // A follow-up about something remembered: note it was answered, so it isn't asked again too soon.
+    const memoryId = memoryIdFromPrompt(prompt.id);
+    if (memoryId) void markMemoryFollowedUp(memoryId, todayKey);
 
     window.dispatchEvent(new Event("journal-session-updated"));
     // Hand the example to the session page so it can use it as the writing placeholder.

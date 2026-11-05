@@ -349,7 +349,8 @@ pnpm dev
 1) Create a Supabase project.
 2) In the SQL editor, run in order: `docs/db/schema.sql`, `schema-phase2.sql` (analysis + pgvector),
    `schema-phase3.sql` (chat sessions), `schema-phase4.sql` (preferences), `schema-phase5.sql`
-   (multiple sessions per day), `schema-phase6a-auth-prep.sql`, then `schema-phase6b-rls.sql`.
+   (multiple sessions per day), `schema-phase6a-auth-prep.sql`, `schema-phase6b-rls.sql`,
+   `schema-phase6c-hardening.sql`, then `schema-phase7-memory.sql` (remembered people and plans).
 3) Authentication -> Sign In / Providers -> enable **Anonymous sign-ins**. People get a private account
    on first visit with no sign-up form.
 4) Copy environment variables into `apps/web/.env.local`:
@@ -379,6 +380,14 @@ Existing users keep their journals: on their next visit the app signs them in an
 saved under their old browser id to the new account (`claim_legacy_data`). Claims close 60 days after
 step 2; to close them earlier, run
 `update app_settings set value = now()::text where key = 'legacy_claim_deadline';`.
+
+## Remembered people and plans (Phase 7)
+After each entry is analysed, the NLP service picks out people ("my sister Priya") and dated plans
+("my interview is on Friday") with plain rules, and the web app stores them in `memory_facts` (owner-only
+rows). Prompts then follow up ("How did your interview go? You mentioned it was yesterday.") and chat
+replies can recall them ("You've mentioned your sister Priya before."). People can review, forget, or turn
+this off in Settings. To enable it on an existing deployment, run `docs/db/schema-phase7-memory.sql` in the
+Supabase SQL editor. Until then the app simply works without memories.
 
 ## Env Var Setup
 - Copy `apps/web/.env.example` to `apps/web/.env.local`, and `services/nlp/.env.example` to `services/nlp/.env`.

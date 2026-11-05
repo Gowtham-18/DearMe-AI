@@ -5,6 +5,7 @@ import { analyzeBodySchema, analyzeEntryResponseSchema, recomputeThemesResponseS
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, EMBEDDING_DIM, parseEmbedding, serializeEmbedding } from "@/lib/nlp";
 import { moodToNumeric } from "@/lib/moods";
+import { memoryEnabled } from "@/lib/memory";
 
 export const maxDuration = 60;
 
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
 
   const { data: entry } = await supabase
     .from("entries")
-    .select("id, user_id, content, mood, created_at")
+    .select("id, user_id, content, mood, created_at, entry_date")
     .eq("id", parsed.data.entryId)
     .maybeSingle();
   if (!entry) {
@@ -33,7 +34,14 @@ export async function POST(req: Request) {
 
   const result = await callNlp(
     "/analyze-entry",
-    { user_id: user.id, entry_id: entry.id, text: entry.content, mood: entry.mood, created_at: entry.created_at },
+    {
+      user_id: user.id,
+      entry_id: entry.id,
+      text: entry.content,
+      mood: entry.mood,
+      created_at: entry.created_at,
+      entry_date: entry.entry_date,
+    },
     20000,
     analyzeEntryResponseSchema
   );
@@ -59,6 +67,12 @@ export async function POST(req: Request) {
   });
   if (analysisError) {
     return NextResponse.json({ error: "Failed to store insights." }, { status: 500 });
+  }
+
+  // Remember people and upcoming events, unless the person turned memory off.
+  if (analysis.memories.length > 0 && (await memoryEnabled(supabase, user.id))) {
+    const { error } = await supabase.rpc("remember_facts", { p_entry_id: entry.id, p_facts: analysis.memories });
+    if (error) warnings.push("memories_not_stored");
   }
 
   // Only store real embeddings: a placeholder vector would corrupt recall and themes.

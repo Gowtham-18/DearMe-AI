@@ -1,4 +1,4 @@
-// Runs the Supabase migrations (docs/db, phases 1..6b) on PGlite with a Supabase-like auth stub and
+// Runs the Supabase migrations (docs/db, phases 1..7) on PGlite with a Supabase-like auth stub and
 // checks the auth rollout: legacy anon data -> anonymous sign-in -> claim -> Row Level Security.
 // Usage: npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17 && node scripts/test-migrations.mjs . /tmp/pg
 import { readFileSync } from "node:fs";
@@ -159,6 +159,52 @@ for (const t of ["app_settings", "legacy_claims", "rate_limits"]) {
   try { await db.query(`select * from ${t} limit 1`); } catch { anonInternal += 1; }
 }
 ok(anonInternal === 3, "signed-out role cannot see the internal tables");
+
+// Phase 7: remembered facts
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase7-memory.sql"));
+await db.exec(sql("schema-phase7-memory.sql"));
+ok(true, "phase 7 applied (and is safe to re-run)");
+await as("authenticated", A);
+const { rows: [me1] } = await db.query(
+  `insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'My sister Priya called. Interview on Friday.') returning id`, [A]);
+const { rows: [me2] } = await db.query(
+  `insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'Talked to Priya again.') returning id`, [A]);
+const facts = JSON.stringify([
+  { kind: "person", key: "person:priya", label: "Priya", detail: "sister", seen_on: "2026-11-05" },
+  { kind: "event", key: "event:interview:2026-11-07", label: "interview", event_date: "2026-11-07", seen_on: "2026-11-05" },
+  { kind: "nonsense", key: "x", label: "x" },
+]);
+const { rows: [rf] } = await db.query(`select remember_facts($1, $2::jsonb) as n`, [me1.id, facts]);
+ok(rf.n === 2, "remember_facts stores people and events, ignores unknown kinds");
+await db.query(`select remember_facts($1, $2::jsonb)`, [me1.id, facts]);
+const { rows: [same] } = await db.query(`select mention_count from memory_facts where fact_key = 'person:priya'`);
+ok(same.mention_count === 1, "re-analysing the same entry doesn't inflate mentions");
+await db.query(`select remember_facts($1, $2::jsonb)`, [me2.id, JSON.stringify([{ kind: "person", key: "person:priya", label: "Priya", seen_on: "2026-11-06" }])]);
+const { rows: [priya] } = await db.query(`select mention_count, detail, last_seen::text from memory_facts where fact_key = 'person:priya'`);
+ok(priya.mention_count === 2 && priya.detail === "sister" && priya.last_seen === "2026-11-06", "a new entry counts a mention and keeps the known relation");
+await as("authenticated", B);
+const { rows: bFacts } = await db.query(`select count(*)::int as n from memory_facts`);
+ok(bFacts[0].n === 0, "user B cannot see A's remembered facts");
+let bFactSpoof = false;
+try { await db.query(`insert into memory_facts (user_id, kind, fact_key, label) values ($1, 'person', 'person:x', 'X')`, [A]); } catch { bFactSpoof = true; }
+ok(bFactSpoof, "user B cannot write facts as user A");
+const { rows: [bOnA] } = await db.query(`select remember_facts($1, $2::jsonb) as n`, [me1.id, facts]);
+ok(bOnA.n === 0, "B cannot attach facts to A's entry");
+await as("authenticated", A);
+const { rows: aFacts } = await db.query(`select count(*)::int as n from memory_facts where user_id = $1`, [A]);
+ok(aFacts[0].n === 2, "B calling remember_facts only writes B's own rows");
+await db.query(`delete from entries where id = $1`, [me2.id]);
+const { rows: gone } = await db.query(`select count(*)::int as n from memory_facts where fact_key = 'person:priya'`);
+ok(gone[0].n === 0, "deleting the source entry forgets the fact");
+await as("anon");
+let anonFacts = false;
+try { const r = await db.query(`select count(*)::int as n from memory_facts`); anonFacts = r.rows[0].n === 0; } catch { anonFacts = true; }
+ok(anonFacts, "signed-out role cannot read remembered facts");
+await as("authenticated", A);
+await db.query(`select delete_my_data(true)`);
+const { rows: aLeft } = await db.query(`select count(*)::int as n from memory_facts`);
+ok(aLeft[0].n === 0, "delete_my_data also forgets remembered facts");
 
 await db.exec(`reset role`);
 const { rows: ben } = await db.query(`select count(*)::int as n from entries where user_id = $1`, [VICTIM_LEGACY]);

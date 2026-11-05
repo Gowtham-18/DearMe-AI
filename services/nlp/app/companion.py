@@ -13,9 +13,19 @@ from .models import (
     PatternConnection,
     PlanSection,
     PromptEvidence,
+    MemoryFact,
     PromptItem,
     ReflectionPlan,
     RenderedMessage,
+)
+from .memory import (
+    RELATIONS,
+    day_phrase,
+    due_event,
+    event_reference,
+    memory_note,
+    person_reference,
+    recurring_person,
 )
 from .pipeline import analyze_affect, extract_keyphrases
 from .responder import (
@@ -502,6 +512,45 @@ def _follow_up_prompt(
 _TOPIC_AREA = {topic: key for key, topic in AREA_TOPICS.items()}
 
 
+def _memory_prompts(memories: Sequence[MemoryFact], today: Optional[str]) -> Tuple[Optional[PromptItem], Optional[PromptItem]]:
+    """A follow-up on a remembered event, and one on someone who keeps coming up."""
+    if not memories:
+        return None, None
+    current = _parse_day(today) or datetime.now(timezone.utc).date()
+    event_prompt = None
+    event = due_event(memories, current)
+    if event:
+        when = _parse_day(event.event_date)
+        ref = event_reference(event)
+        delta = (when - current).days
+        if delta < 0:
+            text = f"How did {ref} go? You mentioned it was {day_phrase(when, current)}."
+            example = "e.g. Better than I expected. I was nervous all morning, but once it started I was okay."
+        elif delta == 0:
+            text = f"{ref[0].upper() + ref[1:]} is today. How are you feeling about it?"
+            example = "e.g. Nervous, but I've prepared as much as I can."
+        else:
+            text = f"{ref[0].upper() + ref[1:]} is {day_phrase(when, current)}. What's on your mind about it?"
+            example = "e.g. I keep running through what could go wrong, even though I've prepared."
+        event_prompt = PromptItem(
+            id=f"memory:{event.id}" if event.id else "memory_event",
+            text=text,
+            reason="You mentioned this in an earlier entry.",
+            example=example,
+        )
+    person_prompt = None
+    person = recurring_person(memories, current)
+    if person:
+        short = person.label if person.label.lower() not in RELATIONS else f"your {person.label}"
+        person_prompt = PromptItem(
+            id=f"memory:{person.id}" if person.id else "memory_person",
+            text=f"You've mentioned {person_reference(person)} in a few entries lately. How are things with {short} these days?",
+            reason="Someone who keeps coming up in your entries.",
+            example="e.g. Better since we talked on Sunday, though I still feel like I'm the one who always reaches out.",
+        )
+    return event_prompt, person_prompt
+
+
 def _entry_area_topic(text: str) -> Optional[str]:
     area = detect_area(text)
     return AREA_TOPICS[area.key] if area else None
@@ -523,12 +572,15 @@ def build_prompts(
     mood: Optional[str],
     time_budget: int,
     today: Optional[str] = None,
+    memories: Sequence[MemoryFact] = (),
 ) -> List[PromptItem]:
     combined = {entry.entry_id: entry for entry in recent_entries + similar_entries}
     combined_entries = list(combined.values())
+    event_prompt, person_prompt = _memory_prompts(memories, today)
+    remembered = [prompt for prompt in (event_prompt, person_prompt) if prompt]
 
     if not combined_entries:
-        return _starter_prompts(mood, time_budget)
+        return (remembered + _starter_prompts(mood, time_budget))[:4]
 
     # Topics are life areas ("work", "your health"): they read naturally in every template.
     theme_topics = [area_label_to_topic(theme) for theme in themes if theme]
@@ -541,7 +593,7 @@ def build_prompts(
         None,
     )
     if not topics and not moment and not _follow_up_prompt(recent_entries, today):
-        return _starter_prompts(mood, time_budget)
+        return (remembered + _starter_prompts(mood, time_budget))[:4]
 
     mood_hint = f"feeling {mood.lower()}" if mood else "right now"
     rng = _seeded_random(user_id + (mood or "") + str(time_budget))
@@ -560,12 +612,14 @@ def build_prompts(
     templates.append("How did {topic} influence how you felt {mood_hint}?")
     rng.shuffle(templates)
 
-    prompts: List[PromptItem] = []
+    prompts: List[PromptItem] = [event_prompt] if event_prompt else []
     follow_up = _follow_up_prompt(recent_entries, today)
     if follow_up:
         prompt, followed_key = follow_up
         prompts.append(prompt)
         topics = [topic for topic in topics if _TOPIC_AREA.get(topic) != followed_key]
+    if person_prompt and len(prompts) < 2:
+        prompts.append(person_prompt)
     if mood:
         prompts.append(
             PromptItem(
@@ -626,6 +680,8 @@ def build_reflection_plan(
     history: Optional[List[ChatMessage]] = None,
     user_name: Optional[str] = None,
     allow_llm: bool = False,
+    memories: Sequence[MemoryFact] = (),
+    today: Optional[str] = None,
 ) -> ReflectionPlan:
     history = history or []
 
@@ -762,6 +818,13 @@ def build_reflection_plan(
             pattern = f"You've written about {shown} before: \u201c{quote}\u201d"
         else:
             pattern = f"This echoes something you wrote recently: \u201c{quote}\u201d"
+
+    # Otherwise, show it remembers who or what they just brought up (once per session).
+    # prior_replies leaves out the opening prompt, which may itself be a memory follow-up.
+    already_noted = any("'ve mentioned" in _norm(t) or "you mentioned your" in _norm(t) for t in prior_replies)
+    if not pattern and memories and not already_noted:
+        current = _parse_day(today) or datetime.now(timezone.utc).date()
+        pattern = memory_note(latest_user_message, memories, current) or ""
 
     # 4) One specific question that moves the conversation a step deeper.
     options = question_candidates(

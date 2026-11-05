@@ -25,6 +25,7 @@ export interface AnalyzeEntryResponse {
   safety: SafetyResult;
   emotion?: string | null;
   mood_suggestion?: string | null;
+  memories?: ExtractedFact[];
   degraded?: string[];
 }
 
@@ -158,3 +159,13 @@ export interface ChatTurnResponse {
   assistant_message: AssistantMessage;
   safety: SafetyResult;
 }
+
+/** A person or dated event the NLP service found in an entry. */
+export type ExtractedFact = {
+  kind: "person" | "event";
+  key: string;
+  label: string;
+  detail?: string | null;
+  event_date?: string | null;
+  seen_on?: string | null;
+};

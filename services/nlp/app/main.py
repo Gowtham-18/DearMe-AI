@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 from .companion import build_prompts, build_reflection_plan, render_plan_to_message  # noqa: E402
+from .memory import extract_facts  # noqa: E402
 from .models import (  # noqa: E402
     AnalyzeEntryRequest,
     AnalyzeEntryResponse,
@@ -158,6 +159,7 @@ def _handle_prompts_v1(payload: PromptsRequestV1) -> PromptsResponseV1:
         mood=payload.mood,
         time_budget=time_budget,
         today=payload.today,
+        memories=payload.memories,
     )
     rationale = PromptRationale(themes_used=payload.themes[:3], mood_used=payload.mood, time_budget_used=time_budget)
     return PromptsResponseV1(prompts=prompts, rationale=rationale, safety=safety)
@@ -180,6 +182,8 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
         safety=safety,
         history=payload.history[-12:],
         allow_llm=allow_llm,
+        memories=payload.memories,
+        today=payload.today,
     )
 
     rendered = render_plan_to_message(plan)
@@ -263,6 +267,7 @@ def analyze_entry(payload: AnalyzeEntryRequest) -> AnalyzeEntryResponse:
         safety=detect_crisis(payload.text),
         emotion=affect.emotion,
         mood_suggestion=_emotion_to_mood(affect.emotion) if affect.emotion_confidence >= 0.4 else None,
+        memories=extract_facts(text, payload.entry_date),
         degraded=degraded,
     )
 

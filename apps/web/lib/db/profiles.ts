@@ -14,6 +14,8 @@ export interface ProfileRecord {
 export interface ProfilePreferences {
   enhanced_language_enabled?: boolean;
   enhanced_consent?: boolean;
+  /** Remember people and upcoming events from entries. On unless turned off. */
+  memory_enabled?: boolean;
 }
 
 export async function getProfile(userId: string): Promise<DbResult<ProfileRecord>> {
