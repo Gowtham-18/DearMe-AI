@@ -1,10 +1,19 @@
+"""Optional LLM wording layer.
+
+The deterministic planner decides *what* to say; the LLM may only re-word it.
+Every call here is gated on (1) the user's explicit consent, passed per request,
+(2) the server flag ENABLE_ENHANCED_LANGUAGE, (3) an API key, and (4) daily budgets.
+Any failure returns None and the caller keeps the deterministic text.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import os
 import re
-from typing import List, Optional
+import threading
+import time
+from typing import Dict, List, Optional
 
 try:
     from openai import OpenAI
@@ -16,51 +25,93 @@ from .models import EvidenceCard, PlanConstraints, ReflectionPlan, RenderedMessa
 logger = logging.getLogger("nlp-service")
 
 DISALLOWED_PATTERNS = [
-    re.compile(r"\bdiagnos(e|is)\b", re.IGNORECASE),
+    re.compile(r"\bdiagnos(e|is|ed)\b", re.IGNORECASE),
     re.compile(r"\bmedical advice\b", re.IGNORECASE),
     re.compile(r"\btherapy\b", re.IGNORECASE),
     re.compile(r"\bmedication\b", re.IGNORECASE),
-    re.compile(r"\bprescrib(e|ing)\b", re.IGNORECASE),
+    re.compile(r"\bprescrib(e|ing|ed)\b", re.IGNORECASE),
     re.compile(r"\bpsychiatrist\b", re.IGNORECASE),
+    re.compile(r"\bdisorder\b", re.IGNORECASE),
     re.compile(r"\byou should\b", re.IGNORECASE),
     re.compile(r"\byou must\b", re.IGNORECASE),
 ]
 
 STOPWORDS = {
-    "the",
-    "and",
-    "a",
-    "an",
-    "to",
-    "of",
-    "in",
-    "on",
-    "for",
-    "with",
-    "that",
-    "this",
-    "is",
-    "it",
-    "are",
-    "was",
-    "were",
-    "be",
-    "as",
-    "at",
-    "by",
-    "or",
-    "from",
-    "you",
-    "your",
-    "we",
-    "our",
-    "they",
-    "their",
+    "the", "and", "a", "an", "to", "of", "in", "on", "for", "with", "that", "this", "is", "it",
+    "are", "was", "were", "be", "as", "at", "by", "or", "from", "you", "your", "we", "our",
+    "they", "their",
 }
+
+REWRITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "validation": {"type": "string"},
+        "reflection": {"type": "string"},
+        "pattern_connection": {"type": "string"},
+        "gentle_nudge": {"type": "string"},
+        "follow_up_question": {"type": "string"},
+    },
+    "required": ["validation", "reflection", "pattern_connection", "gentle_nudge", "follow_up_question"],
+    "additionalProperties": False,
+}
+
+CUES_SCHEMA = {
+    "type": "object",
+    "properties": {"cues": {"type": "array", "items": {"type": "string"}}},
+    "required": ["cues"],
+    "additionalProperties": False,
+}
+
+_client = None
+_client_lock = threading.Lock()
+_budget_lock = threading.Lock()
+_budget_day = ""
+_budget_counts: Dict[str, int] = {}
+
+
+def _flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"true", "1", "yes"}
+
+
+def llm_available() -> bool:
+    return OpenAI is not None and _flag("ENABLE_ENHANCED_LANGUAGE", False) and bool(os.getenv("OPENAI_API_KEY"))
+
+
+def _get_client():
+    global _client
+    if not llm_available():
+        return None
+    with _client_lock:
+        if _client is None:
+            _client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+                timeout=float(os.getenv("OPENAI_TIMEOUT_S", "8")),
+                max_retries=1,
+            )
+        return _client
+
+
+def _consume_budget(user_id: str) -> bool:
+    """In-memory daily caps (per user and global). Resets at UTC midnight or on restart."""
+    global _budget_day, _budget_counts
+    per_user = int(os.getenv("OPENAI_DAILY_LIMIT_PER_USER", "80"))
+    global_cap = int(os.getenv("OPENAI_DAILY_LIMIT", "3000"))
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    with _budget_lock:
+        if today != _budget_day:
+            _budget_day, _budget_counts = today, {}
+        if _budget_counts.get("__all__", 0) >= global_cap or _budget_counts.get(user_id, 0) >= per_user:
+            return False
+        _budget_counts["__all__"] = _budget_counts.get("__all__", 0) + 1
+        _budget_counts[user_id] = _budget_counts.get(user_id, 0) + 1
+        return True
 
 
 def _extract_json(text: str) -> Optional[dict]:
-    text = text.strip()
+    text = (text or "").strip()
     if text.startswith("{"):
         try:
             return json.loads(text)
@@ -75,6 +126,38 @@ def _extract_json(text: str) -> Optional[dict]:
         return None
 
 
+def _chat_json(system_prompt: str, user_prompt: str, schema_name: str, schema: dict, max_tokens: int) -> Optional[dict]:
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+            },
+        )
+    except Exception as exc:
+        logger.info("openai_call_failed name=%s reason=%s", schema_name, type(exc).__name__)
+        return None
+
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError):
+        return None
+    if getattr(message, "refusal", None):
+        logger.info("openai_call_refused name=%s", schema_name)
+        return None
+    return _extract_json(message.content or "")
+
+
 def _tokenize(text: str) -> List[str]:
     return [token for token in re.findall(r"[a-zA-Z']+", text.lower()) if token not in STOPWORDS]
 
@@ -85,35 +168,22 @@ def _passes_overlap_check(plan_text: str, rewrite_text: str) -> bool:
     if not rewrite_tokens:
         return False
     overlap = sum(1 for token in rewrite_tokens if token in plan_tokens)
-    ratio = overlap / max(1, len(rewrite_tokens))
-    return ratio >= 0.35
+    return overlap / max(1, len(rewrite_tokens)) >= 0.35
 
 
 def _passes_policy_checks(text: str) -> bool:
-    for pattern in DISALLOWED_PATTERNS:
-        if pattern.search(text):
-            return False
-    return True
+    return not any(pattern.search(text) for pattern in DISALLOWED_PATTERNS)
 
 
 def rewrite_plan(
     plan: ReflectionPlan,
     evidence_cards: List[EvidenceCard],
     constraints: PlanConstraints,
+    user_id: str = "anonymous",
 ) -> Optional[RenderedMessage]:
-    if OpenAI is None:
+    """Re-word a deterministic plan. Caller must only invoke this with user consent."""
+    if not llm_available() or not _consume_budget(user_id):
         return None
-
-    if not os.getenv("ENABLE_ENHANCED_LANGUAGE", "false").lower() in {"true", "1", "yes"}:
-        return None
-
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
-    max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "180"))
 
     plan_payload = {
         "validation": plan.validation.text,
@@ -122,83 +192,44 @@ def rewrite_plan(
         "gentle_nudge": plan.gentle_nudge.text,
         "follow_up_question": plan.follow_up_question.text,
     }
-    evidence_payload = [
-        {"entry_id": card.entry_id, "snippet": card.snippet, "reason": card.reason}
-        for card in evidence_cards
-    ]
+    evidence_payload = [{"snippet": card.snippet, "reason": card.reason} for card in evidence_cards]
 
     system_prompt = (
-        "You rewrite journaling companion responses. "
-        "Keep meaning identical, do not add new facts or advice. "
-        "Return JSON only with keys validation, reflection, pattern_connection, gentle_nudge, follow_up_question."
+        "You polish the wording of a journaling companion's reply. "
+        "Keep every section's meaning identical. Do not add facts, advice, diagnoses, "
+        "or anything not present in the plan or evidence. Warm, plain, non-judgmental language. "
+        "Each section is one or two short sentences. The follow_up_question must stay a single question."
     )
-
     user_prompt = json.dumps(
-        {
-            "plan": plan_payload,
-            "constraints": constraints.model_dump(),
-            "evidence": evidence_payload,
-            "style": {
-                "tone": "supportive, non-judgmental, journaling companion",
-                "no_medical": True,
-                "no_diagnosis": True,
-                "no_advice": True,
-            },
-        }
+        {"plan": plan_payload, "constraints": constraints.model_dump(), "evidence": evidence_payload}
     )
 
-    try:
-        client = OpenAI(api_key=api_key)
-        response = client.responses.create(
-            model=model,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-    except Exception:
-        logger.info("enhanced_language_rewrite_failed", extra={"reason": "openai_error"})
-        return None
-
-    output_text = getattr(response, "output_text", None) or ""
-    payload = _extract_json(output_text)
+    payload = _chat_json(
+        system_prompt, user_prompt, "companion_reply", REWRITE_SCHEMA, int(os.getenv("OPENAI_MAX_TOKENS", "220"))
+    )
     if not payload:
-        logger.info("enhanced_language_rewrite_failed", extra={"reason": "invalid_json"})
         return None
 
     try:
         rendered = RenderedMessage(**payload)
     except Exception:
-        logger.info("enhanced_language_rewrite_failed", extra={"reason": "schema_validation"})
+        logger.info("enhanced_language_rewrite_failed reason=schema_validation")
         return None
 
     combined_text = " ".join(
         [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge, rendered.follow_up_question]
     ).strip()
-
     if not _passes_policy_checks(combined_text):
-        logger.info("enhanced_language_rewrite_failed", extra={"reason": "policy_violation"})
+        logger.info("enhanced_language_rewrite_failed reason=policy_violation")
         return None
 
-    plan_text = " ".join(
-        [plan.validation.text, plan.reflection.text, plan.pattern_connection.text, plan.gentle_nudge.text, plan.follow_up_question.text]
-    )
-
+    plan_text = " ".join(plan_payload.values())
     evidence_text = " ".join(card.snippet for card in evidence_cards)
     if not _passes_overlap_check(f"{plan_text} {evidence_text}", combined_text):
-        logger.info("enhanced_language_rewrite_failed", extra={"reason": "overlap_check"})
+        logger.info("enhanced_language_rewrite_failed reason=overlap_check")
         return None
 
     return rendered
-
-
-def _openai_enabled(flag_name: str, default: bool = False) -> bool:
-    value = os.getenv(flag_name)
-    if value is None:
-        return default
-    return value.lower() in {"true", "1", "yes"}
 
 
 def generate_journal_cues(
@@ -207,87 +238,46 @@ def generate_journal_cues(
     time_budget: int,
     keyphrases: List[str],
     evidence_cards: List[EvidenceCard],
+    allow_llm: bool = False,
+    user_id: str = "anonymous",
 ) -> Optional[str]:
-    if OpenAI is None:
+    """Short, personalised writing cues. Only with user consent (allow_llm)."""
+    if not allow_llm or not _flag("ENABLE_OPENAI_CUES", True):
         return None
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-
-    enabled_env = os.getenv("ENABLE_OPENAI_CUES")
-    if enabled_env is None:
-        enabled = True
-    else:
-        enabled = _openai_enabled("ENABLE_OPENAI_CUES", False)
-    if not enabled:
+    if not llm_available() or not _consume_budget(user_id):
         return None
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
-    max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "160"))
-
-    trimmed_message = " ".join(message.split())[:400]
-    evidence_snippets = [card.snippet for card in evidence_cards if card.snippet][:2]
-
+    cue_count = 3 if time_budget <= 5 else 4
     system_prompt = (
-        "You generate concise journaling cues. "
-        "Return JSON only: {\"cues\": [\"...\", \"...\", \"...\"]}. "
-        "Cues must be short (max 12 words), supportive, non-judgmental. "
+        f"You write {cue_count} concise journaling cues that help the person keep writing about what they shared. "
+        "Each cue is at most 12 words, supportive, non-judgmental, phrased as an invitation to write. "
         "No advice, no diagnosis, no medical language."
     )
-
     user_prompt = json.dumps(
         {
-            "message": trimmed_message,
+            "message": " ".join(message.split())[:400],
             "mood": mood,
-            "time_budget": time_budget,
             "keyphrases": keyphrases[:5],
-            "evidence": evidence_snippets,
+            "related_past_snippets": [card.snippet for card in evidence_cards if card.snippet][:2],
         }
     )
 
-    try:
-        client = OpenAI(api_key=api_key)
-        response = client.responses.create(
-            model=model,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-    except Exception:
-        logger.info("openai_cues_failed", extra={"reason": "openai_error"})
-        return None
-
-    output_text = getattr(response, "output_text", None) or ""
-    payload = _extract_json(output_text)
-    if not payload or "cues" not in payload:
-        logger.info("openai_cues_failed", extra={"reason": "invalid_json"})
-        return None
-
-    cues = payload.get("cues")
+    payload = _chat_json(system_prompt, user_prompt, "journal_cues", CUES_SCHEMA, 160)
+    cues = payload.get("cues") if payload else None
     if not isinstance(cues, list):
-        logger.info("openai_cues_failed", extra={"reason": "invalid_schema"})
         return None
 
     cleaned = []
-    for cue in cues[:4]:
+    for cue in cues[:cue_count]:
         if not isinstance(cue, str):
             continue
-        text = " ".join(cue.split())
-        if not text:
-            continue
-        if len(text.split()) > 12:
-            continue
-        if not _passes_policy_checks(text):
-            continue
-        cleaned.append(text)
+        text = " ".join(cue.split()).strip()
+        if text and len(text.split()) <= 12 and _passes_policy_checks(text):
+            cleaned.append(text)
 
     if len(cleaned) < 2:
-        logger.info("openai_cues_failed", extra={"reason": "too_few_cues"})
+        logger.info("openai_cues_failed reason=too_few_cues")
         return None
 
-    numbered = " ".join([f"{idx + 1}) {cue}" for idx, cue in enumerate(cleaned[:3])])
+    numbered = " ".join(f"{idx + 1}) {cue}" for idx, cue in enumerate(cleaned))
     return f"Journal cues: {numbered}"
