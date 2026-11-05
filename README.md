@@ -84,7 +84,7 @@ Why
 
 Security Considerations
 
-- No direct database access from client
+- Browser database access is limited to the signed-in user's own rows (Supabase Auth + Row Level Security)
 - CSP headers enforced at deployment
 - Sanitized rendering of user-generated content
 
@@ -198,11 +198,11 @@ Benefits
 
 ### 6.1 Rate Limiting Layers
 
-| Layer      | Mechanism                 |
-| ---------- | ------------------------- |
-| Edge       | IP-based throttling       |
-| API        | User/session-based limits |
-| AI Service | Token and request quotas  |
+| Layer      | Mechanism                                                          | Status  |
+| ---------- | ------------------------------------------------------------------ | ------- |
+| Edge       | IP-based throttling                                                | Planned |
+| API        | Per-user fixed-window limits in Postgres (`check_rate_limit`)      | Built   |
+| AI Service | Shared-secret access, per-user + global daily OpenAI call budgets | Built   |
 
 Why Multi-Layer
 
@@ -347,27 +347,47 @@ pnpm dev
 
 ## Supabase Setup
 1) Create a Supabase project.
-2) In the Supabase SQL editor, run `docs/db/schema.sql`.
-3) Then run `docs/db/schema-phase2.sql` to enable analysis + pgvector tables.
-4) Then run `docs/db/schema-phase3.sql` to enable journaling chat sessions.
-5) Then run `docs/db/schema-phase4.sql` to store profile preferences.
-6) Then run `docs/db/schema-phase5.sql` to allow multiple sessions/entries per day.
-7) Copy environment variables into `apps/web/.env.local`:
+2) In the SQL editor, run in order: `docs/db/schema.sql`, `schema-phase2.sql` (analysis + pgvector),
+   `schema-phase3.sql` (chat sessions), `schema-phase4.sql` (preferences), `schema-phase5.sql`
+   (multiple sessions per day), `schema-phase6a-auth-prep.sql`, then `schema-phase6b-rls.sql`.
+3) Authentication -> Sign In / Providers -> enable **Anonymous sign-ins**. People get a private account
+   on first visit with no sign-up form.
+4) Copy environment variables into `apps/web/.env.local`:
 ```
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 NLP_SERVICE_URL=http://localhost:8000
+NLP_INTERNAL_TOKEN=            # same value as the NLP service; empty is fine locally
 ```
 
-Security note: Phase 1 uses the anon key from the browser (demo-only). Do not enable RLS until
-proper authentication or server-side access is implemented.
+Verify the migrations and RLS policies locally (no Supabase needed):
+```
+npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17
+node scripts/test-migrations.mjs . /tmp/pg
+```
+
+## Upgrading an existing deployment to authenticated access (Phase 6)
+Order matters, so the live app keeps working at every step:
+1) Supabase: enable **Anonymous sign-ins** (step 3 above).
+2) Supabase SQL editor: run `docs/db/schema-phase6a-auth-prep.sql` (additive only).
+3) Generate a secret (e.g. `openssl rand -hex 32`) and set it as `NLP_INTERNAL_TOKEN` on **both** Render and
+   Vercel. On Render also set the build command from `render.yaml`.
+4) Deploy the NLP service, then the web app.
+5) Supabase SQL editor: run `docs/db/schema-phase6b-rls.sql`. From now on each user can only reach their own rows.
+
+Existing users keep their journals: on their next visit the app signs them in anonymously and moves rows
+saved under their old browser id to the new account (`claim_legacy_data`). Claims close 60 days after
+step 2; to close them earlier, run
+`update app_settings set value = now()::text where key = 'legacy_claim_deadline';`.
 
 ## Env Var Setup
-- Copy `.env.example` to `.env.local` in `apps/web` and root if needed.
-- Copy `services/nlp/.env.example` to `services/nlp/.env` for local overrides.
-- Optional NLP overrides: `EMBEDDING_MODEL_NAME`, `SENTIMENT_MODEL_NAME`, `EMOTION_MODEL_NAME`, `LOG_LEVEL`.
-- Enhanced wording controls: `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY`, `OPENAI_MODEL`.
-- Request limits: `MAX_TEXT_LENGTH`, `MAX_ENTRIES_PER_REQUEST`.
+- Copy `apps/web/.env.example` to `apps/web/.env.local`, and `services/nlp/.env.example` to `services/nlp/.env`.
+- `NLP_INTERNAL_TOKEN` must match on web and NLP. When it is set, the NLP service rejects any POST without it.
+- Sentiment: `SENTIMENT_SOURCE=emotion` (default; derived from the emotion model), `transformer`, or `vader`.
+- Memory: `NLP_LOW_MEMORY=true` skips the emotion transformer (lexicon emotion + VADER) for small instances.
+- Enhanced wording: `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_S`,
+  `OPENAI_DAILY_LIMIT_PER_USER`, `OPENAI_DAILY_LIMIT`. It only runs for users who opt in under Settings.
+- Request limits: `MAX_TEXT_LENGTH`, `MAX_ANALYZE_CHARS`, `MAX_ENTRIES_PER_REQUEST`, `MAX_THEME_ENTRIES`.
 - Never commit real secrets or user data.
 
 ## Deployment
@@ -375,23 +395,26 @@ proper authentication or server-side access is implemented.
 - Root Directory: `apps/web`
 - Install command: `pnpm install`
 - Build command: `pnpm build`
-- Env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NLP_SERVICE_URL`
+- Env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NLP_SERVICE_URL`, `NLP_INTERNAL_TOKEN`
 
 ### NLP (Render)
 - Root directory: `services/nlp`
-- Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Build command (installs the CPU-only torch wheel; the default Linux wheel adds ~2 GB of CUDA libraries):
+  `pip install --upgrade pip && pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu && pip install --only-binary=:all: -r requirements.txt`
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1`
+- Health check path: `/health` (also reports which models loaded)
 - Runtime: `services/nlp/runtime.txt`
-- Env vars:
-  - `CORS_ORIGINS` (e.g. `https://your-vercel-domain`)
-  - `LOG_LEVEL`, `EMBEDDING_MODEL_NAME`, `SENTIMENT_MODEL_NAME`, `EMOTION_MODEL_NAME`
-  - `ENABLE_ENHANCED_LANGUAGE`, `MAX_TEXT_LENGTH`, `MAX_ENTRIES_PER_REQUEST`
-  - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_MAX_TOKENS`, `OPENAI_TEMPERATURE`
+- Env vars: `NLP_INTERNAL_TOKEN`, `CORS_ORIGINS`, `SENTIMENT_SOURCE`, `NLP_LOW_MEMORY`, `LOG_LEVEL`,
+  `ENABLE_ENHANCED_LANGUAGE`, `OPENAI_API_KEY` (and the other `OPENAI_*` settings above)
+- Memory: MiniLM + the emotion model need roughly 0.7 GB RAM (measured locally). The free instance has
+  512 MB, so use an instance with at least 1 GB, or set `NLP_LOW_MEMORY=true`.
 
 ## Security Notes
-- Do not log private journal text on the server or client.
-- Render content as plain text to avoid XSS.
-- Use strict .env handling and avoid committing secrets.
-- Anonymous identity is stored on this device. Clearing browser data resets it.
-- Phase 2 still runs without auth; plan to add Supabase Auth + RLS + server-side write proxy next.
-- Enhanced wording (if enabled) uses a server-only OpenAI key to rewrite wording only.
+- Every user is a Supabase Auth user (anonymous by default). Row Level Security limits every table to
+  `user_id = auth.uid()`; the signed-out `anon` role has no table access.
+- API routes take the user id from the verified access token, never from the request body.
+- The NLP service accepts POSTs only with the shared `X-Internal-Token`; it has no database access.
+- Journal text is never logged (only ids and lengths).
+- Clearing browser data signs the person out of their anonymous account; Settings offers a JSON export.
+- Enhanced wording sends the latest message and up to two related past snippets to OpenAI, only for users
+  who opted in, and only re-words the deterministic reply (overlap + policy checks).
