@@ -200,8 +200,12 @@ export default function DashboardPage() {
         return isWithinRange(entry.entry_date, prevStart, prevEnd);
       }).length;
 
-      const trendValue = prevCount === 0 ? (recentCount > 0 ? 100 : 0) : Math.round(((recentCount - prevCount) / prevCount) * 100);
-      const trend = trendValue > 5 ? "up" : trendValue < -5 ? "down" : "flat";
+      const trendValue =
+        prevCount === 0 ? (recentCount > 0 ? 100 : 0) : Math.round(((recentCount - prevCount) / prevCount) * 100);
+      const trend = (trendValue > 5 ? "up" : trendValue < -5 ? "down" : "flat") as
+        | "up"
+        | "down"
+        | "flat";
 
       return {
         id: theme.id,

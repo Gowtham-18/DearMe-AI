@@ -13,6 +13,8 @@ except Exception:  # pragma: no cover - optional at runtime
     SentenceTransformer = None
 
 try:
+    os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+    os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
     from transformers import pipeline as hf_pipeline
 except Exception:  # pragma: no cover - optional at runtime
     hf_pipeline = None
@@ -45,6 +47,14 @@ MOOD_SCALE = {
     "Neutral": 3,
     "Calm": 4,
     "Happy": 5,
+    "Anxious": 2,
+    "Tired": 2,
+    "Lonely": 2,
+    "Overwhelmed": 2,
+    "Grateful": 5,
+    "Irritated": 2,
+    "Hopeful": 5,
+    "Focused": 4,
 }
 
 
@@ -59,14 +69,14 @@ def get_embedding_model():
 def get_sentiment_pipeline():
     if hf_pipeline is None:
         return None
-    return hf_pipeline("sentiment-analysis", model=SENTIMENT_MODEL_NAME)
+    return hf_pipeline("sentiment-analysis", model=SENTIMENT_MODEL_NAME, framework="pt")
 
 
 @lru_cache(maxsize=1)
 def get_emotion_pipeline():
     if hf_pipeline is None:
         return None
-    return hf_pipeline("text-classification", model=EMOTION_MODEL_NAME, top_k=3)
+    return hf_pipeline("text-classification", model=EMOTION_MODEL_NAME, top_k=3, framework="pt")
 
 
 @lru_cache(maxsize=1)

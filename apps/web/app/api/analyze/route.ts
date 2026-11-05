@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { moodToNumeric } from "@/lib/moods";
 
-const getNlpUrl = () => process.env.NLP_SERVICE_URL || "http://localhost:8000";
+const getNlpUrl = () =>
+  process.env.NLP_SERVICE_URL ||
+  process.env.NEXT_PUBLIC_NLP_URL ||
+  "http://localhost:8000";
 
 const serializeEmbedding = (embedding: number[]) => `[${embedding.join(",")}]`;
 
@@ -60,7 +63,16 @@ export async function POST(req: Request) {
       keyphrases: string[];
       embedding: number[];
       safety: { crisis: boolean; reason?: string | null };
+      emotion?: string | null;
+      mood_suggestion?: string | null;
     };
+
+    if (!entry.mood && analysis.mood_suggestion) {
+      await supabase
+        .from("entries")
+        .update({ mood: analysis.mood_suggestion })
+        .eq("id", entry.id);
+    }
 
     const keyphrases = Array.isArray(analysis.keyphrases) ? analysis.keyphrases : [];
     const { error: analysisError } = await supabase.from("entry_analysis").upsert({
@@ -68,7 +80,7 @@ export async function POST(req: Request) {
       user_id: entry.user_id,
       sentiment_label: analysis.sentiment.label,
       sentiment_score: analysis.sentiment.score,
-      mood_numeric: moodToNumeric(entry.mood),
+      mood_numeric: moodToNumeric(entry.mood ?? analysis.mood_suggestion ?? null),
       keyphrases,
       safety_flags: analysis.safety ?? {},
     });
@@ -83,10 +95,6 @@ export async function POST(req: Request) {
       entry_id: entry.id,
       embedding: serializeEmbedding(analysis.embedding),
     });
-
-    if (embeddingError) {
-      return NextResponse.json({ error: "Failed to store embedding." }, { status: 500 });
-    }
 
     const { data: embeddingRows } = await supabase
       .from("journal_embeddings")
@@ -110,7 +118,7 @@ export async function POST(req: Request) {
       }))
       .filter((item) => item.text && item.embedding.length > 0);
 
-    if (recomputeEntries.length >= 2) {
+    if (!embeddingError && recomputeEntries.length >= 2) {
       const themeResponse = await fetch(`${getNlpUrl()}/recompute-themes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -161,7 +169,10 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({ status: "ok" });
+    return NextResponse.json({
+      status: "ok",
+      warning: embeddingError ? "Embedding storage failed. Sentiment still saved." : null,
+    });
   } catch (err) {
     return NextResponse.json({ error: "Unexpected error." }, { status: 500 });
   }

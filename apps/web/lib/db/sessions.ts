@@ -7,7 +7,7 @@ export interface JournalSessionRecord {
   entry_date: string;
   selected_prompt_id: string;
   selected_prompt_text: string;
-  title: string | null;
+  title?: string | null;
   status: "ACTIVE" | "COMPLETED";
   completed_at: string | null;
   created_at: string | null;
@@ -56,19 +56,56 @@ export async function createSession(
     | "selected_prompt_id"
     | "selected_prompt_text"
     | "status"
-    | "title"
   >
+    & { title?: string | null }
 ): Promise<DbResult<JournalSessionRecord>> {
   try {
     const supabase = getSupabaseBrowserClient();
-    const { data, error } = await supabase
+    const insertPayload = { ...payload };
+    if (insertPayload.title == null) {
+      delete insertPayload.title;
+    }
+
+    let { data, error } = await supabase
       .from("journal_sessions")
-      .insert(payload)
+      .insert(insertPayload)
       .select("*")
       .maybeSingle();
 
+    if (error && error.message.includes('column "title"')) {
+      const { title: _title, ...withoutTitle } = insertPayload as Record<string, unknown>;
+      const retry = await supabase
+        .from("journal_sessions")
+        .insert(withoutTitle)
+        .select("*")
+        .maybeSingle();
+      data = retry.data;
+      error = retry.error;
+    }
+
     if (error) {
-      return { data: null, error: error.message };
+      const message = error.message;
+      if (message.includes('relation "journal_sessions"') || message.includes("journal_sessions")) {
+        return {
+          data: null,
+          error:
+            "Session storage is not set up yet. Run docs/db/schema-phase3.sql and docs/db/schema-phase5.sql in Supabase.",
+        };
+      }
+      if (message.includes("row-level security") || message.includes("permission denied")) {
+        return {
+          data: null,
+          error:
+            "Supabase Row Level Security is enabled. Disable RLS for journal_sessions in this demo setup.",
+        };
+      }
+      if (message.includes('column "title"')) {
+        return {
+          data: null,
+          error: "Database schema is out of date. Run docs/db/schema-phase5.sql in Supabase.",
+        };
+      }
+      return { data: null, error: message };
     }
     return { data: data ?? null, error: null };
   } catch (err) {
@@ -209,5 +246,30 @@ export async function listTurnsByUser(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load turns.";
     return { data: [], error: message };
+  }
+}
+
+export async function deleteSession(sessionId: string): Promise<DbResult<null>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { error: turnsError } = await supabase
+      .from("journal_turns")
+      .delete()
+      .eq("session_id", sessionId);
+
+    if (turnsError) {
+      return { data: null, error: turnsError.message };
+    }
+
+    const { error } = await supabase.from("journal_sessions").delete().eq("id", sessionId);
+
+    if (error) {
+      return { data: null, error: error.message };
+    }
+
+    return { data: null, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to delete session.";
+    return { data: null, error: message };
   }
 }

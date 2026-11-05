@@ -32,10 +32,14 @@ const config: Config = {
       },
       colors: {
         border: "hsl(var(--border))",
+        divider: "hsl(var(--divider))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        surface: "hsl(var(--surface))",
+        "surface-2": "hsl(var(--surface-2))",
+        sidebar: "hsl(var(--sidebar))",
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -70,6 +74,8 @@ const config: Config = {
       boxShadow: {
         soft: "0 2px 4px rgba(232, 93, 4, 0.08)",
         medium: "0 4px 16px rgba(232, 93, 4, 0.12)",
+        "soft-gray": "0 2px 10px rgba(15, 23, 42, 0.08)",
+        "hover-gray": "0 6px 18px rgba(15, 23, 42, 0.12)",
       },
     },
   },

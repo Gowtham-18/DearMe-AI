@@ -3,15 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { ChevronRight, Sparkles } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { moodOptions, timeBudgets, journalPrompts } from "@/lib/prompts";
+import { moodOptions, timeBudgets } from "@/lib/prompts";
 import { formatLocalDate } from "@/lib/date";
 import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
-import { useProfileStore } from "@/store/use-profile-store";
 import { createSession, createTurn } from "@/lib/db/sessions";
 
 const defaultTimeBudget = 5;
@@ -42,7 +42,6 @@ const buildFallbackPrompts = (mood: string | null, timeBudget: number): PromptIt
 
 export default function JournalForm() {
   const { ensureUserId } = useSessionStore();
-  const { profile } = useProfileStore();
   const router = useRouter();
   const [mood, setMood] = useState<string | null>(null);
   const [timeBudget, setTimeBudget] = useState<number>(defaultTimeBudget);
@@ -51,7 +50,6 @@ export default function JournalForm() {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(true);
   const [safetyNotice, setSafetyNotice] = useState<string | null>(null);
-  const [directMessage, setDirectMessage] = useState("");
 
   const todayKey = useMemo(() => formatLocalDate(new Date()), []);
   const emptyCopy = useMemo(
@@ -100,7 +98,7 @@ export default function JournalForm() {
     return () => clearTimeout(timer);
   }, [ensureUserId, mood, timeBudget]);
 
-  const startSession = async (prompt: PromptItem, initialMessage?: string) => {
+  const startSession = async (prompt: PromptItem) => {
     setStarting(true);
     setError(null);
     const userId = ensureUserId();
@@ -115,7 +113,7 @@ export default function JournalForm() {
     });
 
     if (sessionError || !data) {
-      setError("We couldn't start a session yet. Please try again.");
+      setError(sessionError ?? "We couldn't start a session yet. Please try again.");
       setStarting(false);
       return;
     }
@@ -127,52 +125,14 @@ export default function JournalForm() {
       content: prompt.text,
     });
 
-    if (initialMessage?.trim()) {
-      await createTurn({
-        session_id: data.id,
-        user_id: userId,
-        role: "user",
-        content: initialMessage.trim(),
-      });
-
-      try {
-        await fetch("/api/chat/turn", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId,
-            sessionId: data.id,
-            latestUserMessage: initialMessage.trim(),
-            timeBudget,
-            mood,
-            enhancedLanguageEnabled: profile?.preferences?.enhanced_language_enabled ?? false,
-          }),
-        });
-      } catch {
-        // The session is still created; the assistant response can be retried in the chat.
-      }
-    }
-
     window.dispatchEvent(new Event("journal-session-updated"));
     setStarting(false);
-    setDirectMessage("");
     router.push(`/journal/session/${data.id}`);
   };
 
   const handlePromptSelect = async (prompt: PromptItem) => {
     if (safetyNotice) return;
     await startSession(prompt);
-  };
-
-  const handleDirectStart = async () => {
-    if (!directMessage.trim() || safetyNotice) return;
-    const prompt = prompts[0] ?? {
-      id: "starter_direct",
-      text: journalPrompts[0],
-      reason: "Starter prompt",
-      evidence: [],
-    };
-    await startSession(prompt, directMessage);
   };
 
   return (
@@ -196,6 +156,7 @@ export default function JournalForm() {
               variant={mood === option ? "default" : "outline"}
               onClick={() => setMood(option)}
               disabled={starting}
+              className="rounded-full px-4"
             >
               {option}
             </Button>
@@ -212,6 +173,7 @@ export default function JournalForm() {
               variant={timeBudget === option ? "default" : "outline"}
               onClick={() => setTimeBudget(option)}
               disabled={starting}
+              className="rounded-full px-4"
             >
               {option} min
             </Button>
@@ -219,10 +181,18 @@ export default function JournalForm() {
         </div>
       </div>
 
-      <div className="rounded-2xl border bg-muted/40 p-4 text-sm text-muted-foreground">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-          AI prompts
-        </p>
+      <div className="rounded-2xl border border-divider bg-surface-2 p-4 text-sm text-muted-foreground">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              AI prompts
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Pick a prompt to begin a private journal session.
+            </p>
+          </div>
+          <Sparkles className="h-4 w-4 text-muted-foreground" />
+        </div>
         {safetyNotice ? (
           <p className="mt-2 text-xs text-muted-foreground">{safetyNotice}</p>
         ) : promptsLoading ? (
@@ -237,11 +207,16 @@ export default function JournalForm() {
                 key={prompt.id}
                 type="button"
                 onClick={() => handlePromptSelect(prompt)}
-                className="w-full rounded-2xl border bg-background p-4 text-left transition hover:border-foreground/20"
+                className="group w-full cursor-pointer rounded-2xl border border-divider bg-background p-4 text-left transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-hover-gray focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={starting}
               >
-                <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{prompt.text}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{prompt.reason}</p>
+                  </div>
+                  <ChevronRight className="mt-1 h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-foreground" />
+                </div>
                 {prompt.evidence?.length > 0 && (
                   <div className="mt-2 space-y-2">
                     {prompt.evidence.map((item, index) => (
@@ -256,24 +231,6 @@ export default function JournalForm() {
             ))}
           </div>
         )}
-      </div>
-
-      <div className="rounded-2xl border bg-background p-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-          Start without a prompt
-        </p>
-        <Textarea
-          className="mt-3 min-h-[96px]"
-          placeholder="Type your thoughts..."
-          value={directMessage}
-          onChange={(event) => setDirectMessage(event.target.value)}
-          disabled={starting || Boolean(safetyNotice)}
-        />
-        <div className="mt-3 flex justify-end">
-          <Button onClick={handleDirectStart} disabled={starting || !directMessage.trim()}>
-            {starting ? "Starting..." : "Start session"}
-          </Button>
-        </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}

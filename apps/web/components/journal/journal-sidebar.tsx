@@ -1,11 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Clock } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { CheckCircle2, Clock, Pencil, Trash2 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { listSessions, type JournalSessionRecord } from "@/lib/db/sessions";
+import { deleteSession, listSessions, updateSessionStatus, type JournalSessionRecord } from "@/lib/db/sessions";
 import { formatDisplayDate, formatLocalDate, parseLocalDate } from "@/lib/date";
 import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
@@ -18,6 +19,7 @@ const sortDatesDesc = (a: string, b: string) => {
 
 export default function JournalSidebar() {
   const { ensureUserId } = useSessionStore();
+  const router = useRouter();
   const [sessions, setSessions] = useState<JournalSessionRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -56,6 +58,28 @@ export default function JournalSidebar() {
 
   const orderedDates = useMemo(() => Object.keys(grouped).sort(sortDatesDesc), [grouped]);
 
+  const formatTime = (timestamp?: string | null) => {
+    if (!timestamp) return "";
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
+
+  const handleEdit = async (event: MouseEvent, sessionId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await updateSessionStatus(sessionId, "ACTIVE");
+    window.dispatchEvent(new Event("journal-session-updated"));
+    router.push(`/journal/session/${sessionId}`);
+  };
+
+  const handleDelete = async (event: MouseEvent, sessionId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await deleteSession(sessionId);
+    window.dispatchEvent(new Event("journal-session-updated"));
+  };
+
   return (
     <section className="space-y-4">
       <div>
@@ -63,7 +87,9 @@ export default function JournalSidebar() {
         <p className="text-xs text-muted-foreground">Private and on-device identity</p>
       </div>
       <div className="space-y-3">
-        {loading && <Card className="p-4 text-xs text-muted-foreground">Loading sessions...</Card>}
+        {loading && (
+          <Card className="p-4 text-xs text-muted-foreground">Loading sessions...</Card>
+        )}
         {!loading && sessions.length === 0 && (
           <Card className="p-4 text-xs text-muted-foreground">{emptyCopy}</Card>
         )}
@@ -74,24 +100,56 @@ export default function JournalSidebar() {
             </p>
             <div className="space-y-2 pl-3">
               {grouped[date].map((session) => (
-                <Link key={session.id} href={`/journal/session/${session.id}`}>
-                  <Card className="p-4 transition hover:border-foreground/20">
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium">
-                        {session.title ?? session.selected_prompt_text.slice(0, 40)}
-                      </p>
-                      {session.status === "COMPLETED" ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                      ) : (
-                        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                      )}
+                <div
+                  key={session.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => router.push(`/journal/session/${session.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      router.push(`/journal/session/${session.id}`);
+                    }
+                  }}
+                  className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-2xl"
+                >
+                  <Card className="group cursor-pointer p-4 transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-hover-gray">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium">
+                          {`Session${formatTime(session.created_at) ? ` - ${formatTime(session.created_at)}` : ""}`}
+                        </p>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {session.status === "COMPLETED" ? "Completed" : "In progress"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          aria-label="Edit session"
+                          onClick={(event) => handleEdit(event, session.id)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          aria-label="Delete session"
+                          onClick={(event) => handleDelete(event, session.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                        {session.status === "COMPLETED" ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                        ) : (
+                          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                        )}
+                      </div>
                     </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {session.selected_prompt_text.slice(0, 72)}
-                      {session.selected_prompt_text.length > 72 ? "..." : ""}
-                    </p>
                   </Card>
-                </Link>
+                </div>
               ))}
             </div>
           </div>

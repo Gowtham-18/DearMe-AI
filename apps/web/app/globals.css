@@ -6,6 +6,10 @@
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
+    --surface: 210 40% 98%;
+    --surface-2: 210 40% 96%;
+    --sidebar: 210 40% 97%;
+    --divider: 214 32% 88%;
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
     --primary: 222 47% 11%;
@@ -33,6 +37,10 @@
     --foreground: 210 40% 98%;
     --card: 222 47% 10%;
     --card-foreground: 210 40% 98%;
+    --surface: 222 47% 8%;
+    --surface-2: 222 47% 12%;
+    --sidebar: 222 47% 9%;
+    --divider: 217 33% 20%;
     --popover: 222 47% 10%;
     --popover-foreground: 210 40% 98%;
     --primary: 210 40% 98%;

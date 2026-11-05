@@ -78,6 +78,14 @@ export function buildMoodTrend(entries: EntryRecord[], days: number): Array<{ da
     Neutral: 3,
     Calm: 4,
     Happy: 5,
+    Anxious: 2,
+    Tired: 2,
+    Lonely: 2,
+    Overwhelmed: 2,
+    Grateful: 5,
+    Irritated: 2,
+    Hopeful: 5,
+    Focused: 4,
   };
 
   const today = new Date();

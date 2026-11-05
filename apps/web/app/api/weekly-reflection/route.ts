@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const getNlpUrl = () => process.env.NLP_SERVICE_URL || "http://localhost:8000";
+const getNlpUrl = () =>
+  process.env.NLP_SERVICE_URL ||
+  process.env.NEXT_PUBLIC_NLP_URL ||
+  "http://localhost:8000";
 
 export async function POST(req: Request) {
   try {

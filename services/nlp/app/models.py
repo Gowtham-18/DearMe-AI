@@ -28,6 +28,8 @@ class AnalyzeEntryResponse(BaseModel):
     keyphrases: List[str]
     embedding: List[float]
     safety: SafetyResult
+    emotion: Optional[str] = None
+    mood_suggestion: Optional[str] = None
 
 
 class ThemeMember(BaseModel):
@@ -136,6 +138,7 @@ class ChatMessage(BaseModel):
 
 class ChatTurnRequest(BaseModel):
     user_id: str
+    user_name: Optional[str] = None
     session_id: str
     selected_prompt: str
     history: List[ChatMessage] = []
@@ -221,6 +224,7 @@ class ExtractedData(BaseModel):
 
 class ChatTurnRequestV1(BaseModel):
     user_id: str
+    user_name: Optional[str] = None
     chat_id: str
     selected_prompt: Optional[str] = None
     user_message: str
