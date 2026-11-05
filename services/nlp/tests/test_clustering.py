@@ -39,3 +39,30 @@ def test_two_clear_groups_become_two_themes_with_all_members() -> None:
     assert {m.entry_id for m in work_theme.members} == {f"w{i}" for i in range(4)}
     assert all(0.0 <= m.score <= 1.0 for t in themes for m in t.members)
     assert abs(sum(t.strength for t in by_label.values()) - 1.0) < 1e-6
+
+
+def test_theme_label_uses_life_area_and_shared_feeling() -> None:
+    from app.themes import _theme_label
+
+    texts = [
+        "My mom called and we argued about my career again. I felt so frustrated after.",
+        "Dinner with my mom went better, but I'm still angry about what she said.",
+    ]
+    assert _theme_label(texts, ["piling manager"], []) == "Family & frustration"
+
+
+def test_theme_label_falls_back_to_a_shared_noun_and_stays_unique() -> None:
+    from app.themes import _theme_label
+
+    texts = ["Walked my dog in the park.", "The dog chased a ball, lovely morning."]
+    assert _theme_label(texts, [], []) == "Dog"
+    assert _theme_label(texts, [], ["Dog"]) != "Dog"
+
+
+def test_keyword_cleanup_drops_fragments() -> None:
+    from app.responder import clean_keyword
+
+    assert clean_keyword("work deadlines")
+    assert not clean_keyword("added meetings")
+    assert not clean_keyword("meetings feel")
+    assert not clean_keyword("barely slept")

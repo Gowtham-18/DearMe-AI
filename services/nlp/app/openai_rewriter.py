@@ -1,9 +1,14 @@
-"""Optional LLM wording layer.
+"""Optional LLM reply layer.
 
-The deterministic planner decides *what* to say; the LLM may only re-word it.
-Every call here is gated on (1) the user's explicit consent, passed per request,
-(2) the server flag ENABLE_ENHANCED_LANGUAGE, (3) an API key, and (4) daily budgets.
-Any failure returns None and the caller keeps the deterministic text.
+When the person has opted in, an LLM writes the companion's reply from the conversation,
+guided by the deterministic analysis (life area, stage, named feeling, related past entries).
+Every call is gated on (1) the user's explicit consent, passed per request, (2) the server flag
+ENABLE_ENHANCED_LANGUAGE, (3) an API key, and (4) daily budgets. Output is checked (no advice,
+diagnosis or medical language; short; exactly one question). Any failure returns None and the
+caller keeps the deterministic reply.
+
+Works with any OpenAI-compatible API: set OPENAI_BASE_URL (e.g. https://api.groq.com/openai/v1)
+and OPENAI_MODEL to use another provider.
 """
 from __future__ import annotations
 
@@ -13,54 +18,54 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - optional dependency
     OpenAI = None
 
-from .models import EvidenceCard, PlanConstraints, ReflectionPlan, RenderedMessage
+from .models import ChatMessage, EvidenceCard
 
 logger = logging.getLogger("nlp-service")
 
 DISALLOWED_PATTERNS = [
     re.compile(r"\bdiagnos(e|is|ed)\b", re.IGNORECASE),
     re.compile(r"\bmedical advice\b", re.IGNORECASE),
-    re.compile(r"\btherapy\b", re.IGNORECASE),
+    re.compile(r"\btherap(y|ist)\b", re.IGNORECASE),
     re.compile(r"\bmedication\b", re.IGNORECASE),
-    re.compile(r"\bprescrib(e|ing|ed)\b", re.IGNORECASE),
+    re.compile(r"\bprescri(be|bing|bed|ption)\b", re.IGNORECASE),
     re.compile(r"\bpsychiatrist\b", re.IGNORECASE),
     re.compile(r"\bdisorder\b", re.IGNORECASE),
     re.compile(r"\byou should\b", re.IGNORECASE),
     re.compile(r"\byou must\b", re.IGNORECASE),
+    re.compile(r"\bas an ai\b", re.IGNORECASE),
 ]
 
-STOPWORDS = {
-    "the", "and", "a", "an", "to", "of", "in", "on", "for", "with", "that", "this", "is", "it",
-    "are", "was", "were", "be", "as", "at", "by", "or", "from", "you", "your", "we", "our",
-    "they", "their",
-}
-
-REWRITE_SCHEMA = {
+REPLY_SCHEMA = {
     "type": "object",
-    "properties": {
-        "validation": {"type": "string"},
-        "reflection": {"type": "string"},
-        "pattern_connection": {"type": "string"},
-        "gentle_nudge": {"type": "string"},
-        "follow_up_question": {"type": "string"},
-    },
-    "required": ["validation", "reflection", "pattern_connection", "gentle_nudge", "follow_up_question"],
+    "properties": {"reply": {"type": "string"}, "question": {"type": "string"}},
+    "required": ["reply", "question"],
     "additionalProperties": False,
 }
 
-CUES_SCHEMA = {
-    "type": "object",
-    "properties": {"cues": {"type": "array", "items": {"type": "string"}}},
-    "required": ["cues"],
-    "additionalProperties": False,
-}
+REPLY_SYSTEM_PROMPT = """You are DearMe, a warm, perceptive journaling companion. You help the person put their own \
+experience into words. You do not fix, advise, or diagnose.
+
+Write a short reply (1-3 sentences, at most 55 words) and then exactly ONE open follow-up question (at most 25 words).
+- Respond to what they actually said. Reflect something concrete from their words in your own words.
+- Never be generic: no "thanks for sharing", "I understand", "that's valid", or stock phrases.
+- Don't attribute feelings they haven't expressed. If unsure how they feel, it's fine to ask.
+- If their message is short or vague (e.g. "my health"), acknowledge it and ask what specifically is going on, \
+offering one or two concrete directions they could take it.
+- Move the conversation one step deeper each turn: what's happening -> how it affects them -> what it means or what \
+they need -> what might help. Never repeat a question already asked in the conversation.
+- Mention a past entry only if one is given in related_past_entries and it clearly relates.
+- No advice ("you should"), no diagnosis, no medical or medication suggestions, no lists, no emojis, no therapy talk.
+- Use their first name at most once, and only if this is the first reply of the conversation.
+- Plain, kind, natural language, like a thoughtful friend who listens well.
+
+Respond only with JSON: {"reply": "...", "question": "..."}"""
 
 _client = None
 _client_lock = threading.Lock()
@@ -88,7 +93,8 @@ def _get_client():
         if _client is None:
             _client = OpenAI(
                 api_key=os.getenv("OPENAI_API_KEY"),
-                timeout=float(os.getenv("OPENAI_TIMEOUT_S", "8")),
+                base_url=os.getenv("OPENAI_BASE_URL") or None,
+                timeout=float(os.getenv("OPENAI_TIMEOUT_S", "10")),
                 max_retries=1,
             )
         return _client
@@ -126,26 +132,37 @@ def _extract_json(text: str) -> Optional[dict]:
         return None
 
 
-def _chat_json(system_prompt: str, user_prompt: str, schema_name: str, schema: dict, max_tokens: int) -> Optional[dict]:
+def _chat_json(
+    system_prompt: str,
+    user_prompt: str,
+    schema_name: str,
+    schema: dict,
+    max_tokens: int,
+    temperature: Optional[float] = None,
+) -> Optional[dict]:
     client = _get_client()
     if client is None:
         return None
-    try:
-        response = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-            },
-        )
-    except Exception as exc:
-        logger.info("openai_call_failed name=%s reason=%s", schema_name, type(exc).__name__)
+    kwargs = dict(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        temperature=temperature if temperature is not None else float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
+        max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+    )
+    formats = [
+        {"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": schema}},
+        {"type": "json_object"},  # providers without strict schemas (e.g. some Groq models)
+    ]
+    response = None
+    for response_format in formats:
+        try:
+            response = client.chat.completions.create(response_format=response_format, **kwargs)
+            break
+        except Exception as exc:
+            logger.info("llm_call_failed name=%s format=%s reason=%s", schema_name, response_format["type"], type(exc).__name__)
+            if "BadRequest" not in type(exc).__name__:
+                return None
+    if response is None:
         return None
 
     try:
@@ -153,131 +170,69 @@ def _chat_json(system_prompt: str, user_prompt: str, schema_name: str, schema: d
     except (AttributeError, IndexError):
         return None
     if getattr(message, "refusal", None):
-        logger.info("openai_call_refused name=%s", schema_name)
+        logger.info("llm_call_refused name=%s", schema_name)
         return None
     return _extract_json(message.content or "")
-
-
-def _tokenize(text: str) -> List[str]:
-    return [token for token in re.findall(r"[a-zA-Z']+", text.lower()) if token not in STOPWORDS]
-
-
-def _passes_overlap_check(plan_text: str, rewrite_text: str) -> bool:
-    plan_tokens = set(_tokenize(plan_text))
-    rewrite_tokens = _tokenize(rewrite_text)
-    if not rewrite_tokens:
-        return False
-    overlap = sum(1 for token in rewrite_tokens if token in plan_tokens)
-    return overlap / max(1, len(rewrite_tokens)) >= 0.35
 
 
 def _passes_policy_checks(text: str) -> bool:
     return not any(pattern.search(text) for pattern in DISALLOWED_PATTERNS)
 
 
-def rewrite_plan(
-    plan: ReflectionPlan,
-    evidence_cards: List[EvidenceCard],
-    constraints: PlanConstraints,
-    user_id: str = "anonymous",
-) -> Optional[RenderedMessage]:
-    """Re-word a deterministic plan. Caller must only invoke this with user consent."""
-    if not llm_available() or not _consume_budget(user_id):
-        return None
-
-    plan_payload = {
-        "validation": plan.validation.text,
-        "reflection": plan.reflection.text,
-        "pattern_connection": plan.pattern_connection.text,
-        "gentle_nudge": plan.gentle_nudge.text,
-        "follow_up_question": plan.follow_up_question.text,
-    }
-    evidence_payload = [{"snippet": card.snippet, "reason": card.reason} for card in evidence_cards]
-
-    system_prompt = (
-        "You polish the wording of a journaling companion's reply. "
-        "Keep every section's meaning identical. Do not add facts, advice, diagnoses, "
-        "or anything not present in the plan or evidence. Warm, plain, non-judgmental language. "
-        "Each section is one or two short sentences. The follow_up_question must stay a single question."
-    )
-    user_prompt = json.dumps(
-        {"plan": plan_payload, "constraints": constraints.model_dump(), "evidence": evidence_payload}
-    )
-
-    payload = _chat_json(
-        system_prompt, user_prompt, "companion_reply", REWRITE_SCHEMA, int(os.getenv("OPENAI_MAX_TOKENS", "220"))
-    )
-    if not payload:
-        return None
-
-    try:
-        rendered = RenderedMessage(**payload)
-    except Exception:
-        logger.info("enhanced_language_rewrite_failed reason=schema_validation")
-        return None
-
-    combined_text = " ".join(
-        [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge, rendered.follow_up_question]
-    ).strip()
-    if not _passes_policy_checks(combined_text):
-        logger.info("enhanced_language_rewrite_failed reason=policy_violation")
-        return None
-
-    plan_text = " ".join(plan_payload.values())
-    evidence_text = " ".join(card.snippet for card in evidence_cards)
-    if not _passes_overlap_check(f"{plan_text} {evidence_text}", combined_text):
-        logger.info("enhanced_language_rewrite_failed reason=overlap_check")
-        return None
-
-    return rendered
-
-
-def generate_journal_cues(
+def generate_reply(
+    *,
     message: str,
+    history: Sequence[ChatMessage],
+    selected_prompt: str,
     mood: Optional[str],
-    time_budget: int,
-    keyphrases: List[str],
-    evidence_cards: List[EvidenceCard],
-    allow_llm: bool = False,
+    first_name: Optional[str],
+    analysis: dict,
+    evidence_cards: Sequence[EvidenceCard],
+    draft: str,
     user_id: str = "anonymous",
-) -> Optional[str]:
-    """Short, personalised writing cues. Only with user consent (allow_llm)."""
-    if not allow_llm or not _flag("ENABLE_OPENAI_CUES", True):
-        return None
+) -> Optional[Dict[str, str]]:
+    """LLM-written reply + question. Caller must only invoke this with user consent."""
     if not llm_available() or not _consume_budget(user_id):
         return None
 
-    cue_count = 3 if time_budget <= 5 else 4
-    system_prompt = (
-        f"You write {cue_count} concise journaling cues that help the person keep writing about what they shared. "
-        "Each cue is at most 12 words, supportive, non-judgmental, phrased as an invitation to write. "
-        "No advice, no diagnosis, no medical language."
+    conversation = [
+        {"role": turn.role, "content": " ".join(turn.content.split())[:600]}
+        for turn in list(history)[-8:]
+        if turn.content.strip()
+    ]
+    if conversation and conversation[-1]["role"] == "user" and conversation[-1]["content"] == " ".join(message.split())[:600]:
+        conversation = conversation[:-1]
+    payload = {
+        "journal_prompt": selected_prompt or None,
+        "mood_at_start": mood,
+        "first_name": first_name or None,
+        "is_first_reply": not any(turn["role"] == "assistant" for turn in conversation),
+        "conversation_so_far": conversation,
+        "latest_message": " ".join(message.split())[:1200],
+        "analysis": analysis,
+        "related_past_entries": [card.snippet for card in evidence_cards if card.snippet][:2],
+        "fallback_reply_for_reference": draft,
+    }
+
+    result = _chat_json(
+        REPLY_SYSTEM_PROMPT,
+        json.dumps(payload, ensure_ascii=False),
+        "companion_reply",
+        REPLY_SCHEMA,
+        int(os.getenv("OPENAI_MAX_TOKENS", "220")),
+        temperature=float(os.getenv("OPENAI_REPLY_TEMPERATURE", "0.6")),
     )
-    user_prompt = json.dumps(
-        {
-            "message": " ".join(message.split())[:400],
-            "mood": mood,
-            "keyphrases": keyphrases[:5],
-            "related_past_snippets": [card.snippet for card in evidence_cards if card.snippet][:2],
-        }
-    )
-
-    payload = _chat_json(system_prompt, user_prompt, "journal_cues", CUES_SCHEMA, 160)
-    cues = payload.get("cues") if payload else None
-    if not isinstance(cues, list):
+    if not result:
         return None
-
-    cleaned = []
-    for cue in cues[:cue_count]:
-        if not isinstance(cue, str):
-            continue
-        text = " ".join(cue.split()).strip()
-        if text and len(text.split()) <= 12 and _passes_policy_checks(text):
-            cleaned.append(text)
-
-    if len(cleaned) < 2:
-        logger.info("openai_cues_failed reason=too_few_cues")
+    reply = " ".join(str(result.get("reply", "")).split())
+    question = " ".join(str(result.get("question", "")).split())
+    if not reply or not question.endswith("?") or question.count("?") != 1 or "?" in reply:
+        logger.info("llm_reply_rejected reason=shape")
         return None
-
-    numbered = " ".join(f"{idx + 1}) {cue}" for idx, cue in enumerate(cleaned))
-    return f"Journal cues: {numbered}"
+    if len(reply.split()) > 70 or len(question.split()) > 30:
+        logger.info("llm_reply_rejected reason=length")
+        return None
+    if not _passes_policy_checks(f"{reply} {question}"):
+        logger.info("llm_reply_rejected reason=policy")
+        return None
+    return {"reply": reply, "question": question}

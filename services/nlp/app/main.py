@@ -35,7 +35,7 @@ from .models import (  # noqa: E402
     WeeklyReflectionRequest,
     WeeklyReflectionResponse,
 )
-from .openai_rewriter import llm_available, rewrite_plan  # noqa: E402
+from .openai_rewriter import generate_reply, llm_available  # noqa: E402
 from .pipeline import (  # noqa: E402
     analyze_affect,
     embed_text,
@@ -182,12 +182,30 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
     )
 
     rendered = render_plan_to_message(plan)
-    mode = "enhanced" if (plan.signals or {}).get("llm_cues") else "deterministic"
+    deterministic_text = " ".join(
+        part for part in [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge] if part
+    ).strip()
+    assistant_text, follow_up, mode = deterministic_text, rendered.follow_up_question, "deterministic"
     if allow_llm and not plan.safety.crisis:
-        rewritten = rewrite_plan(plan, plan.evidence_cards, plan.constraints, user_id=payload.user_id)
-        if rewritten:
-            rendered = rewritten
-            mode = "enhanced"
+        signals_for_llm = plan.signals or {}
+        generated = generate_reply(
+            message=message,
+            history=payload.history[-12:],
+            selected_prompt=payload.selected_prompt or "",
+            mood=payload.mood,
+            first_name=(payload.user_name or "").split()[0] if (payload.user_name or "").strip() else None,
+            analysis={
+                "life_area": signals_for_llm.get("life_area"),
+                "conversation_stage": signals_for_llm.get("stage"),
+                "feeling_they_named": signals_for_llm.get("feeling"),
+                "keyphrases": (signals_for_llm.get("keyphrases") or [])[:5],
+            },
+            evidence_cards=plan.evidence_cards,
+            draft=f"{deterministic_text} {follow_up}".strip(),
+            user_id=payload.user_id,
+        )
+        if generated:
+            assistant_text, follow_up, mode = generated["reply"], generated["question"], "enhanced"
 
     signals = plan.signals or {}
     sentiment = signals.get("sentiment") or {"label": "neutral", "score": 0.0}
@@ -204,10 +222,8 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
     )
 
     return ChatTurnResponseV1(
-        assistant_message=" ".join(
-            [rendered.validation, rendered.reflection, rendered.pattern_connection, rendered.gentle_nudge]
-        ).strip(),
-        follow_up_question=rendered.follow_up_question,
+        assistant_message=assistant_text,
+        follow_up_question=follow_up,
         extracted=ExtractedData(
             sentiment=sentiment,
             emotions=[emotion] if emotion else [],

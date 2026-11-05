@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,13 @@ export default function SettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
+
+  // The header's AI switch sends first-time users here so they see what is shared before opting in.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("consent") === "ai-replies") {
+      setConsentOpen(true);
+    }
+  }, []);
   const [updatingEnhanced, setUpdatingEnhanced] = useState(false);
   const [status, setStatus] = useState<{ message: string; tone: "success" | "error" } | null>(
     null
@@ -44,8 +51,8 @@ export default function SettingsPage() {
   const enhancedSummary = useMemo(
     () =>
       enhancedEnabled
-        ? "Enhanced wording is on."
-        : "Enhanced wording uses a model to rephrase responses only.",
+        ? "AI-written replies are on."
+        : "Replies are written by DearMe's built-in companion. You can opt in to AI-written replies.",
     [enhancedEnabled]
   );
 
@@ -167,27 +174,29 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enhanced wording (optional)</CardTitle>
+          <CardTitle className="text-base">AI-written replies (optional)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>{enhancedSummary}</p>
           <div className="flex items-center justify-between rounded-2xl border border-divider bg-surface-2 px-4 py-3">
             <div>
-              <p className="text-sm font-medium text-foreground">Rewrite-only mode</p>
+              <p className="text-sm font-medium text-foreground">AI-written replies</p>
               <p className="text-xs text-muted-foreground">
-                Uses a language model to improve tone only. Insights stay grounded in your entries.
+                A language model writes the companion&apos;s replies, guided by DearMe&apos;s own analysis.
+                Safety checks and insights stay the same.
               </p>
             </div>
             <Switch
               checked={enhancedEnabled}
               onCheckedChange={() => handleEnhancedToggle()}
               disabled={!canToggleEnhanced || updatingEnhanced}
-              aria-label="Enhanced wording toggle"
+              aria-label="AI-written replies toggle"
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            When on, your latest message and up to two related snippets from past entries are sent to
-            OpenAI to word each reply. Your full journal is never sent. Turn it off anytime.
+            When on, your latest message, the earlier messages of the current session and up to two
+            related snippets from past entries are sent to the AI provider DearMe uses to write each
+            reply. Your full journal is never sent. Turn it off anytime.
           </p>
           {prefStatus && (
             <p
@@ -291,11 +300,12 @@ export default function SettingsPage() {
       <Dialog open={consentOpen} onOpenChange={setConsentOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Enable enhanced wording?</DialogTitle>
+            <DialogTitle>Turn on AI-written replies?</DialogTitle>
             <DialogDescription>
-              This optional mode sends your latest message and up to two related snippets from past
-              entries to OpenAI, which rewords the companion&apos;s reply and suggests writing cues.
-              It does not change meaning or add advice. You can turn it off anytime.
+              This optional mode sends your latest message, the earlier messages of the current session
+              and up to two related snippets from past entries to DearMe&apos;s AI provider, which writes
+              the companion&apos;s reply. Replies are checked to avoid advice and medical language, and
+              crisis messages always get the built-in safety response. You can turn it off anytime.
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">

@@ -6,7 +6,11 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
+from collections import Counter
+
+from .companion import _FEELING_WORDS, _infer_feeling, determined_nouns
 from .pipeline import extract_keyphrases
+from .responder import AREA_LABELS, FEELING_NOUNS, LIFE_AREAS, clean_keyword, detect_area
 
 try:
     from sklearn.cluster import KMeans
@@ -129,12 +133,44 @@ def _rank_keywords(cluster_phrases: Sequence[List[str]], other_counts: Dict[str,
     return ranked
 
 
-def _label_from_keywords(keywords: Sequence[str]) -> str:
-    if not keywords:
-        return "Unlabeled theme"
-    if len(keywords) == 1:
-        return keywords[0].title()
-    return f"{keywords[0].title()} & {keywords[1].title()}"
+def _theme_keywords(texts: Sequence[str], ranked: Sequence[str], limit: int = 5) -> List[str]:
+    """Things the entries are about: nouns the person introduced and life-area words first,
+    then distinctive keyphrases that name something (not fragments like "dog long")."""
+    counts: Counter = Counter()
+    for text in texts:
+        lowered = " ".join(text.lower().split())
+        found = set(determined_nouns(text))
+        found |= {match.group(0) for area in LIFE_AREAS for match in area.pattern.finditer(lowered)}
+        counts.update(found)
+    nouns = [word for word, _ in counts.most_common()]
+    phrases = [
+        phrase for phrase in ranked
+        if clean_keyword(phrase, _FEELING_WORDS) and not any(word in nouns for word in phrase.split())
+    ]
+    return list(dict.fromkeys(nouns + phrases))[:limit] or list(ranked)[:limit]
+
+
+def _theme_label(texts: Sequence[str], keywords: Sequence[str], taken: Sequence[str]) -> str:
+    """'Work & stress', 'Health & worry', 'Dog & calm': what the entries are about, and how they feel."""
+    majority = max(2, (len(texts) + 1) // 2)
+    areas = Counter(area.key for area in (detect_area(text) for text in texts) if area)
+    nouns = Counter(noun for text in texts for noun in set(determined_nouns(text)))
+    feelings = Counter(feeling for feeling in (_infer_feeling(text) for text in texts) if feeling)
+
+    heads: List[str] = []
+    if areas and areas.most_common(1)[0][1] >= majority:
+        heads.append(AREA_LABELS[areas.most_common(1)[0][0]])
+    heads += [noun.capitalize() for noun, count in nouns.most_common() if count >= 2]
+    heads += [keyword.capitalize() for keyword in keywords]
+    heads.append("Recurring thoughts")
+
+    feeling = feelings.most_common(1)[0] if feelings else None
+    tail = FEELING_NOUNS[feeling[0]] if feeling and feeling[1] >= majority else None
+    for head in dict.fromkeys(heads):
+        label = f"{head} & {tail}" if tail and "&" not in head else head
+        if label not in taken:
+            return label
+    return f"{heads[0]} ({len(taken) + 1})"
 
 
 def recompute_themes(entries: List[Dict]) -> List[ThemeResult]:
@@ -168,7 +204,8 @@ def recompute_themes(entries: List[Dict]) -> List[ThemeResult]:
             for phrase in set(phrases):
                 in_cluster[phrase] = in_cluster.get(phrase, 0) + 1
         other_counts = {phrase: total_counts[phrase] - in_cluster.get(phrase, 0) for phrase in total_counts}
-        keywords = _rank_keywords(cluster_phrases, other_counts)
+        ranked = _rank_keywords(cluster_phrases, other_counts)
+        keywords = _theme_keywords([entries[i].get("text", "") for i in indexes], ranked)
 
         centroid = embeddings[indexes].mean(axis=0)
         centroid /= np.linalg.norm(centroid) or 1.0
@@ -190,7 +227,11 @@ def recompute_themes(entries: List[Dict]) -> List[ThemeResult]:
         themes.append(
             ThemeResult(
                 temp_theme_id=str(uuid.uuid4()),
-                label=_label_from_keywords(keywords),
+                label=_theme_label(
+                    [entries[i].get("text", "") for i in indexes],
+                    [phrase for phrase in keywords if clean_keyword(phrase, _FEELING_WORDS)],
+                    [theme.label for theme in themes],
+                ),
                 keywords=keywords,
                 strength=round(len(indexes) / len(entries), 3),
                 members=members,
