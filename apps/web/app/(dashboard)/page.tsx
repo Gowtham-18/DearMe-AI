@@ -3,19 +3,26 @@
 import { useEffect, useMemo, useState } from "react";
 
 import Greeting from "@/components/dashboard/greeting";
-import MoodTrendsChart from "@/components/dashboard/mood-trends-chart";
 import RecentReflections from "@/components/dashboard/recent-reflections";
 import StatCard from "@/components/dashboard/stat-card";
-import SentimentTrendsChart from "@/components/dashboard/sentiment-trends-chart";
+import TrendChart from "@/components/dashboard/trend-chart";
 import ThemeCards from "@/components/dashboard/theme-cards";
 import HabitTracker from "@/components/dashboard/habit-tracker";
 import { Card } from "@/components/ui/card";
 import { listEntries, type EntryRecord } from "@/lib/db/entries";
 import { listEntryAnalysis, type EntryAnalysisRecord } from "@/lib/db/analysis";
 import { listThemes, listThemeMembership, type ThemeMembershipRecord, type ThemeRecord } from "@/lib/db/themes";
-import { buildHabitDays, buildSentimentTrend } from "@/lib/analysis";
+import { buildHabitDays, buildMoodTrend, buildSentimentTrend, countRecentEntries } from "@/lib/analysis";
 import { formatDisplayDate, parseLocalDate, shiftDate } from "@/lib/date";
-import { buildMoodTrend, computeCurrentStreak, computePrimaryMood, computeTotalEntries } from "@/lib/streaks";
+import {
+  computeCurrentStreak,
+  computeLongestStreak,
+  computePrimaryMood,
+  computePrimaryMoodShare,
+  computeTotalEntries,
+} from "@/lib/streaks";
+import { describeSentiment, MOOD_LEVELS } from "@/lib/sentiment";
+import { emptyStateCopy, pickCopy } from "@/lib/copy";
 import { useSessionStore } from "@/store/use-session-store";
 
 const getLatestEntriesByDate = (entries: EntryRecord[]): Map<string, EntryRecord> => {
@@ -102,6 +109,10 @@ export default function DashboardPage() {
   const streak = computeCurrentStreak(entries);
   const total = computeTotalEntries(entries);
   const primaryMood = computePrimaryMood(entries);
+  const longestStreak = computeLongestStreak(entries);
+  const thisWeek = countRecentEntries(entries, 7);
+  const moodShare = primaryMood === "--" ? null : computePrimaryMoodShare(entries, primaryMood);
+  const today = new Date().toDateString();
   const moodTrend7 = buildMoodTrend(entries, 7);
   const moodTrend30 = buildMoodTrend(entries, 30);
   const sentimentTrend7 = buildSentimentTrend(entries, analyses, 7);
@@ -200,9 +211,10 @@ export default function DashboardPage() {
         return isWithinRange(entry.entry_date, prevStart, prevEnd);
       }).length;
 
-      const trendValue =
-        prevCount === 0 ? (recentCount > 0 ? 100 : 0) : Math.round(((recentCount - prevCount) / prevCount) * 100);
-      const trend = (trendValue > 5 ? "up" : trendValue < -5 ? "down" : "flat") as
+      // A theme with no entries in the previous week is "new", not "+100%".
+      const isNew = prevCount === 0 && recentCount > 0;
+      const trendValue = prevCount === 0 ? 0 : Math.round(((recentCount - prevCount) / prevCount) * 100);
+      const trend = (isNew || trendValue > 5 ? "up" : trendValue < -5 ? "down" : "flat") as
         | "up"
         | "down"
         | "flat";
@@ -216,7 +228,8 @@ export default function DashboardPage() {
         relatedEntries,
         precededBy,
         trend,
-        trendValue,
+        trendValue: isNew || recentCount + prevCount === 0 ? undefined : trendValue,
+        trendLabel: isNew ? "New this week" : recentCount + prevCount === 0 ? "Earlier" : undefined,
         evidenceCards,
       };
     });
@@ -243,20 +256,54 @@ export default function DashboardPage() {
       <section className="grid gap-4 md:grid-cols-3">
         <StatCard
           title="Current streak"
-          value={streak === 1 ? "1 Day" : `${streak} Days`}
-          trend={streak > 0 ? "Active" : "Start today"}
+          value={streak === 1 ? "1 day" : `${streak} days`}
+          trend={streak === 0 ? "Write today to start" : `Best: ${longestStreak} ${longestStreak === 1 ? "day" : "days"}`}
         />
         <StatCard
           title="Total reflections"
           value={total === 1 ? "1 entry" : `${total} entries`}
-          trend="Up to date"
+          trend={`${thisWeek} in the last 7 days`}
         />
-        <StatCard title="Primary mood" value={primaryMood} trend={primaryMood === "--" ? "Add a mood" : "Stable"} />
+        <StatCard
+          title="Most common mood"
+          value={moodShare && moodShare.count >= 2 ? primaryMood : moodShare ? "Varied" : "--"}
+          trend={
+            !moodShare
+              ? "Pick a mood when you journal"
+              : moodShare.count >= 2
+                ? `${moodShare.count} of ${moodShare.total} check-ins`
+                : "No single mood stands out yet"
+          }
+        />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
-        <SentimentTrendsChart data7={sentimentTrend7} data30={sentimentTrend30} />
-        <MoodTrendsChart data7={moodTrend7} data30={moodTrend30} />
+        <TrendChart
+          title="Tone of your writing"
+          subtitle="How heavy or positive your entries read, from the words you wrote"
+          data7={sentimentTrend7}
+          data30={sentimentTrend30}
+          domain={[-1, 1]}
+          ticks={[-1, -0.5, 0, 0.5, 1]}
+          tickLabel={(value) => (value === 1 ? "Positive" : value === 0 ? "Neutral" : value === -1 ? "Heavy" : "")}
+          describe={describeSentiment}
+          formatValue={(value) => `${value > 0 ? "+" : ""}${value.toFixed(2)}`}
+          referenceY={0}
+          color="hsl(var(--chart-3))"
+          emptyCopy={pickCopy(emptyStateCopy.sentiment, today)}
+        />
+        <TrendChart
+          title="Mood check-ins"
+          subtitle="The mood you picked when you started journaling"
+          data7={moodTrend7}
+          data30={moodTrend30}
+          domain={[1, 5]}
+          ticks={[1, 2, 3, 4, 5]}
+          tickLabel={(value) => MOOD_LEVELS[value] ?? ""}
+          describe={(value) => MOOD_LEVELS[Math.round(value)] ?? "--"}
+          color="hsl(var(--chart-1))"
+          emptyCopy={pickCopy(emptyStateCopy.mood, today)}
+        />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[1.2fr,1fr]">

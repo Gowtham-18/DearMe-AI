@@ -53,7 +53,7 @@ export function computeTotalEntries(entries: EntryRecord[]): number {
 
 export function computePrimaryMood(entries: EntryRecord[]): string {
   const moodCounts = new Map<string, number>();
-  getLatestEntriesByDate(entries).forEach((entry) => {
+  entries.forEach((entry) => {
     if (!entry.mood) return;
     const count = moodCounts.get(entry.mood) ?? 0;
     moodCounts.set(entry.mood, count + 1);
@@ -71,45 +71,26 @@ export function computePrimaryMood(entries: EntryRecord[]): string {
   return topMood || "--";
 }
 
-export function buildMoodTrend(entries: EntryRecord[], days: number): Array<{ day: string; value: number }> {
-  const moodScale: Record<string, number> = {
-    Sad: 1,
-    Stressed: 2,
-    Neutral: 3,
-    Calm: 4,
-    Happy: 5,
-    Anxious: 2,
-    Tired: 2,
-    Lonely: 2,
-    Overwhelmed: 2,
-    Grateful: 5,
-    Irritated: 2,
-    Hopeful: 5,
-    Focused: 4,
-  };
+/** Longest run of consecutive days with at least one entry. */
+export function computeLongestStreak(entries: EntryRecord[]): number {
+  const dates = [...new Set(entries.map((entry) => entry.entry_date))].sort();
+  let best = 0;
+  let run = 0;
+  let previous: Date | null = null;
+  dates.forEach((key) => {
+    const date = parseLocalDate(key);
+    const gap = previous ? Math.round((date.getTime() - previous.getTime()) / 86_400_000) : null;
+    run = gap === 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+    previous = date;
+  });
+  return best;
+}
 
-  const today = new Date();
-  const points: Array<{ day: string; value: number }> = [];
-  const latestByDate = getLatestEntriesByDate(entries);
-
-  for (let i = days - 1; i >= 0; i -= 1) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    const dateKey = formatLocalDate(date);
-    const entry = latestByDate.find((item) => item.entry_date === dateKey && item.mood);
-
-    if (entry?.mood && moodScale[entry.mood]) {
-      points.push({
-        day:
-          days <= 7
-            ? new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date)
-            : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date),
-        value: moodScale[entry.mood],
-      });
-    }
-  }
-
-  return points;
+/** How many check-ins used the primary mood, out of all check-ins with a mood. */
+export function computePrimaryMoodShare(entries: EntryRecord[], mood: string): { count: number; total: number } {
+  const withMood = entries.filter((entry) => entry.mood);
+  return { count: withMood.filter((entry) => entry.mood === mood).length, total: withMood.length };
 }
 
 export function getStreakLabel(streak: number): string {
