@@ -88,10 +88,17 @@ export default function TopHeader() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-3 rounded-full border border-divider bg-surface-2 px-3 py-2 shadow-soft-gray">
-            <div className="space-y-0.5">
+          {/* The on/off state is shown inside this fixed-width pill, so toggling never moves the switch. */}
+          <div className="flex items-center gap-2.5 rounded-full border border-divider bg-surface-2 px-3 py-2 shadow-soft-gray">
+            <Sparkles
+              className={`h-4 w-4 shrink-0 transition-colors ${enhancedEnabled ? "text-primary" : "text-muted-foreground/60"}`}
+              aria-hidden
+            />
+            <div className="w-[5.5rem] space-y-0.5">
               <p className="text-xs font-medium text-foreground">AI replies</p>
-              <p className="hidden text-[11px] text-muted-foreground sm:block">Optional, opt-in.</p>
+              <p className="hidden text-[11px] text-muted-foreground sm:block">
+                {enhancedEnabled ? "On · opt-in" : "Off · opt-in"}
+              </p>
             </div>
             <Switch
               checked={enhancedEnabled}
@@ -100,12 +107,6 @@ export default function TopHeader() {
               aria-label="AI replies"
             />
           </div>
-          {enhancedEnabled && (
-            <Badge className="hidden gap-1 rounded-full px-3 py-1 sm:inline-flex" variant="secondary">
-              <Sparkles className="h-3.5 w-3.5" />
-              AI replies
-            </Badge>
-          )}
           {/* On phones, keep only the controls; the status badges live in the wider layout. */}
           <Badge className="hidden gap-1 rounded-full px-3 py-1 sm:inline-flex" variant="secondary">
             <ShieldCheck className="h-3.5 w-3.5" />
