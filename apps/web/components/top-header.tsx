@@ -84,14 +84,14 @@ export default function TopHeader() {
         <div className="space-y-2">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">DearMe AI</p>
-            <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
+            <h1 className="text-xl font-semibold text-foreground sm:text-2xl">{title}</h1>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-3 rounded-full border border-divider bg-surface-2 px-3 py-2 shadow-soft-gray">
             <div className="space-y-0.5">
               <p className="text-xs font-medium text-foreground">AI replies</p>
-              <p className="text-[11px] text-muted-foreground">Optional, opt-in.</p>
+              <p className="hidden text-[11px] text-muted-foreground sm:block">Optional, opt-in.</p>
             </div>
             <Switch
               checked={enhancedEnabled}
@@ -101,19 +101,20 @@ export default function TopHeader() {
             />
           </div>
           {enhancedEnabled && (
-            <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">
+            <Badge className="hidden gap-1 rounded-full px-3 py-1 sm:inline-flex" variant="secondary">
               <Sparkles className="h-3.5 w-3.5" />
               AI replies
             </Badge>
           )}
-          <Badge className="gap-1 rounded-full px-3 py-1" variant="secondary">
+          {/* On phones, keep only the controls; the status badges live in the wider layout. */}
+          <Badge className="hidden gap-1 rounded-full px-3 py-1 sm:inline-flex" variant="secondary">
             <ShieldCheck className="h-3.5 w-3.5" />
             Privacy Locked
           </Badge>
-          <Button size="icon" variant="ghost" aria-label="Notifications">
+          <Button size="icon" variant="ghost" aria-label="Notifications" className="hidden sm:inline-flex">
             <Bell className="h-4 w-4" />
           </Button>
-          <Avatar>
+          <Avatar className="hidden sm:flex">
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
           <ThemeToggle />

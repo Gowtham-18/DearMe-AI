@@ -122,8 +122,9 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 - `anon` and `authenticated` still hold SELECT on `app_settings`, `legacy_claims` and `rate_limits`.
 - RLS with no policies means no rows come back, but the tables still show up in the GraphQL schema.
 - _Fix:_ `revoke all on app_settings, legacy_claims, rate_limits from anon, authenticated;` (the SECURITY DEFINER functions keep working).
+- _Status:_ already written and tested in `docs/db/schema-phase6c-hardening.sql`. Checked on 2026-11-05: production still had full grants, so 6c had not been applied there. Run it in the Supabase SQL editor.
 
-**L2. `set_updated_at` has a mutable `search_path`.** _Fix:_ `alter function public.set_updated_at() set search_path = public;`
+**L2. `set_updated_at` has a mutable `search_path`.** _Fix:_ `alter function public.set_updated_at() set search_path = public;` Also in `schema-phase6c-hardening.sql`, and not yet applied on production (2026-11-05).
 
 **L3. `vector` extension is in the `public` schema.** Cosmetic. Moving it to an `extensions` schema is optional, and it's risky on a live database.
 
@@ -171,7 +172,7 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 | 1 | Delete unused `OPENAI_*` variables from Vercel (L4) | 2 min | Owner (dashboard) |
 | 2 | Turn on 2FA for the Supabase, Vercel, Render and GitHub accounts; review who has access (H2) | 10 min | Owner |
 | 3 | Enable Turnstile CAPTCHA for anonymous sign-in (M1) | 30 min | Dev + dashboard |
-| 4 | Revoke leftover grants and pin `set_updated_at` (L1, L2): one migration | 15 min | Dev |
+| 4 | Revoke leftover grants and pin `set_updated_at` (L1, L2): apply `schema-phase6c-hardening.sql` on production | 2 min | Owner (SQL editor) |
 | 5 | Locale-aware crisis resources, including India helplines (M3) | 1–2 h | Dev |
 | 6 | "Keep my journal safe" email or passkey linking, plus a storage warning (H1) | 0.5–1 day | Dev |
 | 7 | Privacy notice: providers, regions, retention, who can access, AI opt-in (M5, H2) | 0.5 day | Owner + dev |

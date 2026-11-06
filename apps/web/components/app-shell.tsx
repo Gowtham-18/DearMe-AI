@@ -121,7 +121,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <TopHeader />
             </div>
           </div>
-          <main className="flex-1 px-4 pb-8 md:px-8">
+          {/* Extra bottom space on phones so the tab bar never covers the end of the page. */}
+          <main className="flex-1 px-4 pb-28 md:px-8 md:pb-8">
             {content}
             {error && authState === "ready" && (
               <div className="mt-4 rounded-2xl border bg-card p-4 text-sm text-destructive">{error}</div>
