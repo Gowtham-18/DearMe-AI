@@ -1,4 +1,4 @@
-// Runs the Supabase migrations (docs/db, phases 1..7) on PGlite with a Supabase-like auth stub and
+// Runs the Supabase migrations (docs/db, phases 1..8) on PGlite with a Supabase-like auth stub and
 // checks the auth rollout: legacy anon data -> anonymous sign-in -> claim -> Row Level Security.
 // Usage: npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17 && node scripts/test-migrations.mjs . /tmp/pg
 import { readFileSync } from "node:fs";
@@ -209,6 +209,43 @@ ok(aLeft[0].n === 0, "delete_my_data also forgets remembered facts");
 await db.exec(`reset role`);
 const { rows: ben } = await db.query(`select count(*)::int as n from entries where user_id = $1`, [VICTIM_LEGACY]);
 ok(ben[0].n === 1, "other users' (unclaimed) data untouched");
+
+// Phase 8: accounts (usernames, availability check, delete my account)
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase8-accounts.sql"));
+await db.exec(sql("schema-phase8-accounts.sql"));
+ok(true, "phase 8 applied (and is safe to re-run)");
+await as("authenticated", A);
+await db.query(`insert into profiles (user_id, name, age) values ($1, 'Asha', 30) on conflict (user_id) do nothing`, [A]);
+await db.query(`update profiles set username = 'asha_k' where user_id = $1`, [A]);
+let badName = false;
+try { await db.query(`update profiles set username = 'Asha K!' where user_id = $1`, [A]); } catch { badName = true; }
+ok(badName, "usernames must be lower-case letters, digits or underscores");
+await as("authenticated", B);
+await db.query(`insert into profiles (user_id, name, age) values ($1, 'Ben', 40) on conflict (user_id) do nothing`, [B]);
+let dupName = false;
+try { await db.query(`update profiles set username = 'asha_k' where user_id = $1`, [B]); } catch { dupName = true; }
+ok(dupName, "usernames are unique");
+await as("anon");
+const { rows: [avail] } = await db.query(
+  `select username_available('asha_k') taken, username_available('new_name') free, username_available('admin') reserved, username_available('x') short`);
+ok(!avail.taken && avail.free && !avail.reserved && !avail.short, "signed-out sign-up form can check availability (true/false only)");
+let anonProfiles = 0;
+try { anonProfiles = (await db.query(`select * from profiles`)).rows.length; } catch { anonProfiles = 0; }
+ok(anonProfiles === 0, "availability check doesn't expose profiles to signed-out visitors");
+let anonDelete = false;
+try { await db.query(`select delete_my_account()`); } catch { anonDelete = true; }
+ok(anonDelete, "signed-out role cannot call delete_my_account");
+await as("authenticated", B);
+await db.query(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'Ben entry')`, [B]);
+await db.query(`select delete_my_account()`);
+await db.exec(`reset role`);
+const { rows: [afterDelete] } = await db.query(
+  `select (select count(*) from auth.users where id = $1)::int b_login, (select count(*) from profiles where user_id = $2)::int b_profile,
+          (select count(*) from entries where user_id = $2)::int b_entries, (select count(*) from auth.users where id = $3)::int a_login,
+          (select count(*) from profiles where user_id = $4)::int a_profile`, [B, B, A, A]);
+ok(afterDelete.b_login === 0 && afterDelete.b_profile === 0 && afterDelete.b_entries === 0, "delete_my_account removes the caller's data and login");
+ok(afterDelete.a_login === 1 && afterDelete.a_profile === 1, "delete_my_account leaves other accounts alone");
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures ? 1 : 0);

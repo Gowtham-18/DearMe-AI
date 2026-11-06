@@ -10,7 +10,7 @@ _Assessed 2026-11-05 against the live pilot (Vercel web app, Render NLP service,
 - Secrets stay on the server. Journal text is never logged, and AI replies are off unless the person opts in.
 - The main gaps are about trust and durability, not leaks:
   - journal text is readable by anyone with database-admin access
-  - anonymous accounts can be lost for good
+  - ~~anonymous accounts can be lost for good~~ (resolved in phase 8: real accounts)
   - there's no abuse protection on sign-up
   - crisis resources are US-only
 
@@ -25,7 +25,8 @@ _Assessed 2026-11-05 against the live pilot (Vercel web app, Render NLP service,
 | Weekly summaries | `weekly_reflections` | |
 | Remembered facts: names + relation ("Priya, sister"), dated plans ("job interview, 20 Nov") | `memory_facts` | Owner-only RLS. Shown in Settings, where each can be forgotten or memory turned off. Removed with its source entry and by "Delete data" |
 | Profile: name, age, occupation, preferences | `profiles` | Includes the AI-replies consent flag |
-| Session token | Browser `localStorage` (`dearme-auth`) | Anonymous Supabase session |
+| Session token | Browser `localStorage` (`dearme-auth`) | Supabase session (PKCE sign-in) |
+| Login: email, username, password hash, linked Google identity | Supabase Auth (`auth.users`, `auth.identities`), `profiles.username` | Passwords are bcrypt hashes kept by Supabase Auth; the app never sees or stores them |
 | Rate-limit counters, legacy-claim records | `rate_limits`, `legacy_claims` | Internal |
 
 **Where the text travels.**
@@ -69,7 +70,11 @@ Ranked by impact for a journaling product.
 
 ### High
 
-**H1. Anonymous accounts can be lost permanently.**
+**H1. Anonymous accounts can be lost permanently.** _Resolved (phase 8)._
+- People now sign in with Google or email + password (email confirmed by a one-time code), on any device. Existing guests are sent to sign-up and upgraded in place, so their journal comes with them.
+- Remaining: once existing guests have upgraded, turn off anonymous sign-ins and clean up abandoned guest users.
+
+_Original finding:_
 - The only key to a person's journal is the session in that one browser's `localStorage`.
 - Clearing site data, switching browsers or devices, or private browsing means the journal is gone for good, with no recovery.
 - The rows stay in the database, unreachable, forever.
@@ -108,7 +113,7 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 - For users in India this should lead with Tele-MANAS **14416** / 1-800-891-4416 and KIRAN 1800-599-0019.
 - _Recommendation:_ pick resources by browser locale or time zone. Keep findahelpline.com as the fallback.
 
-**M4. Deleting your data doesn't delete the account.**
+**M4. Deleting your data doesn't delete the account.** _Resolved (phase 8): `delete_my_account()` removes every row and the caller's `auth.users` record; Account → Delete account calls it._
 - `delete_my_data(p_include_profile => true)` removes every row, but the anonymous `auth.users` record stays (it holds no journal content).
 - _Recommendation:_ add a server route that uses the service key **server-side only** to delete the auth user after the data is gone. Or include it in the H1 inactivity cleanup.
 
@@ -140,6 +145,17 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 **L7. Advisor notes that are expected.**
 - "Anonymous access policies" on the user tables is by design: anonymous users are real, signed-in, isolated users.
 - "Leaked password protection" doesn't apply, because there are no passwords.
+
+## Accounts (phase 8)
+
+- **Passwords:** handled only by Supabase Auth (bcrypt hashes). Rules: 8–72 bytes, a letter and a number, not a common password, not containing the email or username. Changing a password may require a code (reauthentication nonce).
+- **Email ownership:** sign-up, email change and password reset are all confirmed with a one-time code sent to the email.
+- **Input handling:** Zod validation on every form, Unicode normalisation and removal of control/zero-width/bidi characters, usernames limited to `^[a-z0-9_]{3,20}$` with a database check constraint and unique index. No SQL is built from strings anywhere; all access is through Supabase's parameterised API under RLS.
+- **No account enumeration:** log-in and reset messages are the same whether or not the email exists. `username_available()` returns only true/false and exposes no profile data.
+- **Redirects:** PKCE flow; the callback only follows same-site paths.
+- **Sessions:** "Log out on all devices" revokes every refresh token.
+- **Deletion:** `delete_my_account()` (security definer, caller-only) removes all of the caller's rows and their login.
+- **Not changed:** journal text is still plain text inside Postgres (H2). Signing in doesn't change who can read the database.
 
 ## AI replies (OpenAI or compatible)
 
@@ -174,8 +190,8 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 | 3 | Enable Turnstile CAPTCHA for anonymous sign-in (M1) | 30 min | Dev + dashboard |
 | 4 | Revoke leftover grants and pin `set_updated_at` (L1, L2): apply `schema-phase6c-hardening.sql` on production | 2 min | Owner (SQL editor) |
 | 5 | Locale-aware crisis resources, including India helplines (M3) | 1–2 h | Dev |
-| 6 | "Keep my journal safe" email or passkey linking, plus a storage warning (H1) | 0.5–1 day | Dev |
+| 6 | ~~"Keep my journal safe" email or passkey linking (H1)~~ Done: real accounts (phase 8) | — | — |
 | 7 | Privacy notice: providers, regions, retention, who can access, AI opt-in (M5, H2) | 0.5 day | Owner + dev |
 | 8 | Nonce-based CSP (M2) | 2–3 h | Dev |
-| 9 | Delete the auth user on "delete everything", plus an inactivity cleanup (M4, H1) | 2–3 h | Dev |
+| 9 | ~~Delete the auth user (M4)~~ Done (phase 8). Still open: clean up abandoned guest users | 1 h | Dev |
 | 10 | Backups beyond the free plan (L5) | — | Owner, before launch |

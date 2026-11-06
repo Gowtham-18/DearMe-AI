@@ -1,21 +1,69 @@
+import type { User } from "@supabase/supabase-js";
+
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 // Before Phase 6 the app identified people by a random id in localStorage.
 const LEGACY_ID_KEY = "dearme-user-id";
 const LEGACY_SESSION_KEY = "dearme-session";
 
-/** Return the signed-in user's id, signing in anonymously on first visit. */
-export async function ensureSignedIn(): Promise<string> {
+export type AuthUser = User;
+
+const WELCOME_KEY = "dearme-welcome-seen";
+
+export function hasSeenWelcome(): boolean {
+  try {
+    return window.localStorage.getItem(WELCOME_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markWelcomeSeen() {
+  try {
+    window.localStorage.setItem(WELCOME_KEY, "1");
+  } catch {
+    // Private mode: the slides simply show again next time.
+  }
+}
+
+/** The signed-in user, or null. A guest (anonymous) user from before accounts is still returned. */
+export async function getSignedInUser(): Promise<User | null> {
   const supabase = getSupabaseBrowserClient();
   const { data } = await supabase.auth.getSession();
-  if (data.session?.user) {
-    return data.session.user.id;
+  return data.session?.user ?? null;
+}
+
+export const isGuest = (user: User | null | undefined) => Boolean(user?.is_anonymous);
+
+export const authCallbackUrl = () => `${window.location.origin}/auth/callback`;
+
+/**
+ * Continue with Google. A guest journal on this device is kept by attaching Google to it
+ * (same user id, so every entry stays); `link` attaches Google to the signed-in account from the
+ * Account page. Otherwise this signs in or creates an account.
+ */
+export async function continueWithGoogle(
+  opts: { link?: boolean } = {}
+): Promise<{ error: { message?: string; code?: string; status?: number } | null }> {
+  const supabase = getSupabaseBrowserClient();
+  const user = await getSignedInUser();
+  const next = opts.link ? `?next=${encodeURIComponent("/account")}` : "";
+  const options = { redirectTo: `${authCallbackUrl()}${next}` };
+  const { error } = opts.link || isGuest(user)
+    ? await supabase.auth.linkIdentity({ provider: "google", options })
+    : await supabase.auth.signInWithOAuth({ provider: "google", options });
+  return { error };
+}
+
+/** Sign out and forget this device's cached profile. scope "global" ends every session. */
+export async function signOut(scope: "local" | "global" = "local") {
+  const supabase = getSupabaseBrowserClient();
+  await supabase.auth.signOut({ scope });
+  try {
+    window.localStorage.removeItem("dearme-profile");
+  } catch {
+    // ignore
   }
-  const { data: signIn, error } = await supabase.auth.signInAnonymously();
-  if (error || !signIn.user) {
-    throw new Error(error?.message ?? "Anonymous sign-in failed.");
-  }
-  return signIn.user.id;
 }
 
 function readLegacyIds(): string[] {

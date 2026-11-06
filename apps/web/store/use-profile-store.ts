@@ -6,6 +6,7 @@ export interface Profile {
   name: string;
   age: number;
   occupation?: string | null;
+  username?: string | null;
   preferences?: {
     enhanced_language_enabled?: boolean;
     enhanced_consent?: boolean;

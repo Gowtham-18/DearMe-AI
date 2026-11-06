@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Bell, ShieldCheck, Sparkles } from "lucide-react";
 
 import ThemeToggle from "@/components/theme-toggle";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import AccountMenu from "@/components/account-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -18,6 +18,7 @@ const titleMap: Record<string, string> = {
   "/memories": "Journals/Memories",
   "/weekly": "Weekly Reflection",
   "/settings": "Privacy & Safety",
+  "/account": "Account",
 };
 
 export default function TopHeader() {
@@ -36,14 +37,6 @@ export default function TopHeader() {
   const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
   const enhancedConsent = profile?.preferences?.enhanced_consent ?? false;
 
-  const initials = profile?.name
-    ? profile.name
-        .split(" ")
-        .map((part) => part[0])
-        .slice(0, 2)
-        .join("")
-        .toUpperCase()
-    : "AN";
 
   const persistPreferences = async (changes: {
     enhanced_language_enabled: boolean;
@@ -115,9 +108,7 @@ export default function TopHeader() {
           <Button size="icon" variant="ghost" aria-label="Notifications" className="hidden sm:inline-flex">
             <Bell className="h-4 w-4" />
           </Button>
-          <Avatar className="hidden sm:flex">
-            <AvatarFallback>{initials}</AvatarFallback>
-          </Avatar>
+          <AccountMenu />
           <ThemeToggle />
         </div>
       </div>

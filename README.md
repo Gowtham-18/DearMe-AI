@@ -350,9 +350,9 @@ pnpm dev
 2) In the SQL editor, run in order: `docs/db/schema.sql`, `schema-phase2.sql` (analysis + pgvector),
    `schema-phase3.sql` (chat sessions), `schema-phase4.sql` (preferences), `schema-phase5.sql`
    (multiple sessions per day), `schema-phase6a-auth-prep.sql`, `schema-phase6b-rls.sql`,
-   `schema-phase6c-hardening.sql`, then `schema-phase7-memory.sql` (remembered people and plans).
-3) Authentication -> Sign In / Providers -> enable **Anonymous sign-ins**. People get a private account
-   on first visit with no sign-up form.
+   `schema-phase6c-hardening.sql`, `schema-phase7-memory.sql` (remembered people and plans), then
+   `schema-phase8-accounts.sql` (usernames and account deletion).
+3) Authentication: set up sign-in as described in **Accounts and sign-in (Phase 8)** below.
 4) Copy environment variables into `apps/web/.env.local`:
 ```
 NEXT_PUBLIC_SUPABASE_URL=...
@@ -389,6 +389,36 @@ replies can recall them ("You've mentioned your sister Priya before."). People c
 this off in Settings. To enable it on an existing deployment, run `docs/db/schema-phase7-memory.sql` in the
 Supabase SQL editor. Until then the app simply works without memories.
 
+## Accounts and sign-in (Phase 8)
+People sign up with **Google**, or with **email + username + password** confirmed by a one-time code sent
+to their email. First-time visitors see five welcome slides (`/welcome`) before sign-up or log-in. The
+top-right avatar opens the account menu (Account, Privacy & Safety, Log out); `/account` holds the
+profile, sign-in methods, password change, "log out on all devices" and account deletion.
+
+- Passwords are handled only by Supabase Auth, which stores bcrypt hashes. The app never stores or logs them.
+- Inputs are validated with Zod on every form (`apps/web/lib/auth-validation.ts`): email format, username
+  `^[a-z0-9_]{3,20}$` (reserved names blocked), passwords of 8–72 bytes with a letter and a number, not a
+  common password and not containing the email or username. Text is Unicode-normalised and stripped of
+  control, zero-width and direction-override characters. All database access goes through Supabase's
+  parameterised API and RLS, so there is no SQL string building to inject into.
+- Error messages don't reveal whether an email has an account.
+- Sign-in uses the PKCE flow; `/auth/callback` only redirects to same-site paths.
+- Guests from the anonymous-account era are sent to sign-up; their journal stays with them because the
+  account is upgraded in place (same user id).
+
+Supabase dashboard setup:
+1) SQL editor: run `docs/db/schema-phase8-accounts.sql` **before** deploying the web app.
+2) Authentication -> Sign In / Providers: enable **Email** with **Confirm email** on, set the minimum
+   password length to 8 (letters and digits); enable **Google** (client id and secret from Google Cloud).
+   Turn on **Allow manual linking** so guests and existing users can connect Google.
+3) Authentication -> Emails -> Templates: make **Confirm signup**, **Change email address**,
+   **Reset password** and **Reauthentication** show the code with `{{ .Token }}`.
+4) Authentication -> Emails -> SMTP: set up a custom SMTP provider (for example Resend). The built-in
+   sender only reaches project team members and is heavily rate-limited.
+5) Authentication -> URL Configuration: Site URL = your Vercel URL; add `https://<your-app>/auth/callback`
+   and `http://localhost:3000/**` to Redirect URLs.
+6) Once existing guests have upgraded, anonymous sign-ins can be turned off.
+
 ## Env Var Setup
 - Copy `apps/web/.env.example` to `apps/web/.env.local`, and `services/nlp/.env.example` to `services/nlp/.env`.
 - `NLP_INTERNAL_TOKEN` must match on web and NLP. When it is set, the NLP service rejects any POST without it.
@@ -420,11 +450,12 @@ Supabase SQL editor. Until then the app simply works without memories.
   that peak flat. The port opens immediately and models load in the background; `/health` shows when they are ready.
 
 ## Security Notes
-- Every user is a Supabase Auth user (anonymous by default). Row Level Security limits every table to
+- Every user is a Supabase Auth user (Google or email + password). Row Level Security limits every table to
   `user_id = auth.uid()`; the signed-out `anon` role has no table access.
 - API routes take the user id from the verified access token, never from the request body.
 - The NLP service accepts POSTs only with the shared `X-Internal-Token`; it has no database access.
 - Journal text is never logged (only ids and lengths).
-- Clearing browser data signs the person out of their anonymous account; Settings offers a JSON export.
+- Passwords are stored only as bcrypt hashes by Supabase Auth. "Delete account" removes every row and the
+  login itself (`delete_my_account`). Settings offers a JSON export.
 - Enhanced wording sends the latest message and up to two related past snippets to OpenAI, only for users
   who opted in, and only re-words the deterministic reply (overlap + policy checks).
