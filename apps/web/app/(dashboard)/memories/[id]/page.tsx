@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,16 @@ import { getSession, listTurns, type JournalSessionRecord, type JournalTurnRecor
 import { formatDisplayDate } from "@/lib/date";
 import { describeSentiment } from "@/lib/sentiment";
 import { apiFetch } from "@/lib/auth";
+import { composeJournal } from "@/lib/journal-story";
+import JournalPage from "@/components/journal/journal-page";
+import { useProfileStore } from "@/store/use-profile-store";
+
+type View = "journal" | "entry" | "conversation";
+const VIEW_LABELS: Record<View, string> = {
+  journal: "Journal page",
+  entry: "Your entry",
+  conversation: "Full conversation",
+};
 
 export default function MemoryDetailPage() {
   // Next 16 passes page params as a Promise; useParams() reads them directly in a client page.
@@ -26,8 +36,15 @@ export default function MemoryDetailPage() {
   const [analysis, setAnalysis] = useState<EntryAnalysisRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // The journal page is composed from the conversation, so it waits for the turns to arrive.
+  const [detailsLoaded, setDetailsLoaded] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState<string | null>(null);
-  const [view, setView] = useState<"entry" | "conversation">("entry");
+  const [view, setView] = useState<View>("journal");
+  const firstName = useProfileStore((state) => state.profile?.name?.trim().split(/\s+/)[0] ?? null);
+  const story = useMemo(
+    () => composeJournal(session?.selected_prompt_text, turns, entry?.content ?? ""),
+    [session?.selected_prompt_text, turns, entry?.content]
+  );
 
   useEffect(() => {
     if (!entryId) return;
@@ -50,6 +67,7 @@ export default function MemoryDetailPage() {
       setAnalysis(analysisRes.data);
       setSession(sessionRes.data);
       setTurns(turnsRes.data);
+      setDetailsLoaded(true);
     };
     load();
   }, [entryId]);
@@ -86,6 +104,7 @@ export default function MemoryDetailPage() {
 
   const wordCount = entry.content.trim() ? entry.content.trim().split(/\s+/).length : 0;
   const hasConversation = turns.some((turn) => turn.role === "assistant");
+  const views: View[] = hasConversation ? ["journal", "entry", "conversation"] : ["journal", "entry"];
 
   return (
     <div className="space-y-4">
@@ -99,9 +118,9 @@ export default function MemoryDetailPage() {
                 {entry.mood ?? "No mood"} · {entry.time_budget} min · {wordCount} words
               </p>
             </div>
-            {hasConversation && (
-              <div className="flex gap-1 rounded-full border p-1" role="tablist" aria-label="Entry view">
-                {(["entry", "conversation"] as const).map((value) => (
+            {views.length > 1 && (
+              <div className="flex flex-wrap gap-1 rounded-full border p-1" role="tablist" aria-label="Entry view">
+                {views.map((value) => (
                   <Button
                     key={value}
                     size="sm"
@@ -111,20 +130,30 @@ export default function MemoryDetailPage() {
                     className={`h-8 rounded-full px-3 ${view === value ? "bg-foreground/[0.08] text-foreground" : ""}`}
                     onClick={() => setView(value)}
                   >
-                    {value === "entry" ? "Your entry" : "Full conversation"}
+                    {VIEW_LABELS[value]}
                   </Button>
                 ))}
               </div>
             )}
           </div>
-          {session?.selected_prompt_text && (
+          {session?.selected_prompt_text && view !== "journal" && (
             <p className="rounded-xl border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
               Prompt: <span className="text-foreground">{session.selected_prompt_text}</span>
             </p>
           )}
         </CardHeader>
         <CardContent>
-          {view === "entry" || !hasConversation ? (
+          {view === "journal" && !detailsLoaded ? (
+            <div className="h-64 animate-pulse rounded-xl border bg-muted/40" aria-busy="true" aria-label="Putting your journal page together" />
+          ) : view === "journal" ? (
+            <JournalPage
+              story={story}
+              entryDate={entry.entry_date}
+              mood={entry.mood}
+              timeBudget={entry.time_budget}
+              signature={firstName}
+            />
+          ) : view === "entry" || !hasConversation ? (
             <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{entry.content}</div>
           ) : (
             <div className="space-y-3">
