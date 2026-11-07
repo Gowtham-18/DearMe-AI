@@ -10,6 +10,7 @@ import {
   passwordChecks,
   passwordProblem,
   passwordStrength,
+  safeNextPath,
   usernameSchema,
   validateNewPassword,
   validateSignUp,
@@ -74,4 +75,17 @@ test("auth errors are friendly and never confirm whether an email exists", () =>
   assert.equal(authErrorMessage({ status: 429, message: "x" }), "Too many attempts. Please wait a minute and try again.");
   assert.match(authErrorMessage({ code: "otp_expired" }), /expired/);
   assert.equal(authErrorMessage(null), "Something went wrong. Please try again.");
+});
+
+test("safeNextPath only allows paths on this site", () => {
+  const origin = "https://dear-me-ai-webapp.vercel.app";
+  const bad = ["//evil.com", "/\\evil.com", "/\t/evil.com", "/\n/evil.com", "/\r/evil.com", "https://evil.com",
+    "javascript:alert(1)", "\t//evil.com", " //evil.com", "http:evil.com"];
+  for (const value of bad) {
+    assert.equal(safeNextPath(value, origin), "/", JSON.stringify(value));
+  }
+  assert.equal(safeNextPath("/account", origin), "/account");
+  assert.equal(safeNextPath("/forgot-password?step=new", origin), "/forgot-password?step=new");
+  assert.equal(safeNextPath(null, origin), "/");
+  assert.equal(safeNextPath("", origin), "/");
 });

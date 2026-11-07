@@ -1,4 +1,4 @@
-// Runs the Supabase migrations (docs/db, phases 1..8) on PGlite with a Supabase-like auth stub and
+// Runs the Supabase migrations (docs/db, phases 1..9) on PGlite with a Supabase-like auth stub and
 // checks the auth rollout: legacy anon data -> anonymous sign-in -> claim -> Row Level Security.
 // Usage: npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17 && node scripts/test-migrations.mjs . /tmp/pg
 import { readFileSync } from "node:fs";
@@ -30,6 +30,8 @@ await db.exec(`
   create table auth.users (id uuid primary key);
   create function auth.uid() returns uuid language sql stable as
     $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  create function auth.jwt() returns jsonb language sql stable as
+    $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
   grant usage on schema public, auth to anon, authenticated;
   grant select on auth.users to anon, authenticated;
   alter default privileges in schema public grant all on tables to anon, authenticated;
@@ -42,9 +44,10 @@ for (const file of ["schema.sql", "schema-phase2.sql", "schema-phase3.sql", "sch
 }
 ok(true, "phases 1-5 applied");
 
-const as = async (role, uid) => {
+const as = async (role, uid, { guest = false } = {}) => {
   await db.exec(`reset role`);
   await db.query(`select set_config('request.jwt.claim.sub', $1, false)`, [uid ?? ""]);
+  await db.query(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify(uid ? { sub: uid, is_anonymous: guest } : {})]);
   await db.exec(`set role ${role}`);
 };
 const vec = (axis) => `[${Array.from({ length: 384 }, (_, i) => (i === axis ? 1 : 0)).join(",")}]`;
@@ -246,6 +249,64 @@ const { rows: [afterDelete] } = await db.query(
           (select count(*) from profiles where user_id = $4)::int a_profile`, [B, B, A, A]);
 ok(afterDelete.b_login === 0 && afterDelete.b_profile === 0 && afterDelete.b_entries === 0, "delete_my_account removes the caller's data and login");
 ok(afterDelete.a_login === 1 && afterDelete.a_profile === 1, "delete_my_account leaves other accounts alone");
+
+// Phase 9: hardening (size limits, reserved names, parent ownership, no guest writes)
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase9-hardening.sql"));
+await db.exec(sql("schema-phase9-hardening.sql"));
+ok(true, "phase 9 applied (and is safe to re-run)");
+const C = "33333333-3333-4333-8333-333333333333";
+const D = "44444444-4444-4444-8444-444444444444";
+const G = "55555555-5555-4555-8555-555555555555";
+await db.query(`insert into auth.users (id) values ($1), ($2), ($3) on conflict do nothing`, [C, D, G]);
+const fails = async (q, params) => { try { await db.query(q, params); return false; } catch { return true; } };
+
+await as("authenticated", C);
+const { rows: [cEntry] } = await db.query(
+  `insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'C entry') returning id`, [C]);
+const { rows: [cSession] } = await db.query(
+  `insert into journal_sessions (user_id, entry_date, selected_prompt_id, selected_prompt_text) values ($1, current_date, 'p1', 'x') returning id`, [C]);
+await db.query(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'user', 'hi')`, [cSession.id, C]);
+await db.query(`insert into entry_analysis (entry_id, user_id, sentiment_label, sentiment_score) values ($1, $2, 'neutral', 0)`, [cEntry.id, C]);
+await db.query(`insert into journal_embeddings (user_id, entry_id, embedding) values ($1, $2, $3)`, [C, cEntry.id, vec(3)]);
+const { rows: [themed] } = await db.query(`select replace_user_themes($1::jsonb) n`, [JSON.stringify([
+  { id: "66666666-6666-4666-8666-666666666666", label: "Work", keywords: ["work"], strength: 0.9, members: [{ entry_id: cEntry.id, score: 0.8 }] }])]);
+ok(themed.n >= 1, "normal writes still work: entries, turns, analysis, embeddings, themes");
+ok(await fails(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'system', 'x')`, [cSession.id, C]),
+  "turn roles are limited to user/assistant");
+ok(await fails(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'user', repeat('x', 8001))`, [cSession.id, C]),
+  "oversized chat messages are rejected");
+ok(await fails(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, repeat('x', 100001))`, [C]),
+  "oversized entries are rejected");
+await db.query(`insert into profiles (user_id, name, age) values ($1, 'Cara', 30) on conflict (user_id) do nothing`, [C]);
+ok(await fails(`update profiles set username = 'admin' where user_id = $1`, [C]), "reserved usernames are rejected by the database");
+ok(await fails(`update profiles set preferences = jsonb_build_object('x', repeat('x', 9000)) where user_id = $1`, [C]),
+  "oversized preferences are rejected");
+
+await as("authenticated", D);
+ok(await fails(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'user', 'planted')`, [cSession.id, D]),
+  "a user can't attach messages to someone else's session");
+ok(await fails(`insert into entry_analysis (entry_id, user_id, sentiment_label, sentiment_score) values ($1, $2, 'neutral', 0)`, [cEntry.id, D]),
+  "a user can't attach analysis to someone else's entry");
+ok(await fails(`insert into journal_embeddings (user_id, entry_id, embedding) values ($1, $2, $3)`, [D, cEntry.id, vec(4)]),
+  "a user can't attach embeddings to someone else's entry");
+
+await as("authenticated", G, { guest: true });
+ok(await fails(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'guest')`, [G]),
+  "guest sessions can't write new data");
+await db.exec(`reset role`);
+await db.query(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, 'old guest entry')`, [G]);
+await as("authenticated", G, { guest: true });
+const { rows: guestRows } = await db.query(`select count(*)::int n from entries`);
+ok(guestRows[0].n === 1, "guest sessions can still read their own data");
+ok(await fails(`update entries set content = 'edit' where user_id = $1`, [G]), "guest sessions can't edit data");
+await db.query(`select delete_my_account()`);
+await db.exec(`reset role`);
+const { rows: [guestGone] } = await db.query(`select count(*)::int n from entries where user_id = $1`, [G]);
+ok(guestGone.n === 0, "guest sessions can still delete their account");
+await as("anon");
+const { rows: [names] } = await db.query(`select username_available('api') api, username_available('cara_ok') free`);
+ok(!names.api && names.free, "availability check uses the same reserved list");
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures ? 1 : 0);
