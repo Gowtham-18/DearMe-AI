@@ -14,13 +14,15 @@ export function getSupabaseBrowserClient(): SupabaseClient {
     throw new Error("Missing Supabase environment variables.");
   }
 
-  // The session (an anonymous Supabase user) is persisted in localStorage and refreshed
-  // automatically. Every query runs as that user, so Row Level Security applies.
+  // The signed-in session is persisted in localStorage and refreshed automatically. Every query
+  // runs as that user, so Row Level Security applies. Google sign-in uses the PKCE flow: the
+  // /auth/callback page exchanges the one-time code itself (so no tokens ever appear in a URL).
   browserClient = createClient(supabaseUrl, supabaseKey, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
+      flowType: "pkce",
       storageKey: "dearme-auth",
     },
   });

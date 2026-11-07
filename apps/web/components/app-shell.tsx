@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import Sidebar from "@/components/sidebar";
 import TopHeader from "@/components/top-header";
@@ -10,27 +10,39 @@ import AppLoading from "@/components/app-loading";
 import { useSessionStore } from "@/store/use-session-store";
 import { useProfileStore } from "@/store/use-profile-store";
 import { getProfile, upsertProfile } from "@/lib/db/profiles";
-import { claimLegacyData, ensureSignedIn } from "@/lib/auth";
+import { claimLegacyData, getSignedInUser, hasSeenWelcome, isGuest } from "@/lib/auth";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type AuthState = "pending" | "ready" | "error";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { userId, setUserId } = useSessionStore();
   const { profile, status, error, setStatus, setProfile, setError } = useProfileStore();
   const [authState, setAuthState] = useState<AuthState>("pending");
 
-  // 1) Sign in (anonymously on first visit), then move any pre-auth journals to this account.
+  // 1) Require an account. No session: the welcome slides (first visit) or log in. A guest journal
+  //    from before accounts goes to sign-up, which attaches the new login to it so nothing is lost.
   useEffect(() => {
     let alive = true;
     fetch("/api/warm").catch(() => undefined);
 
     (async () => {
       try {
-        const uid = await ensureSignedIn();
-        await claimLegacyData(uid);
+        const user = await getSignedInUser();
         if (!alive) return;
-        setUserId(uid);
+        if (!user) {
+          router.replace(hasSeenWelcome() ? "/login" : "/welcome");
+          return;
+        }
+        if (isGuest(user)) {
+          router.replace("/signup?from=guest");
+          return;
+        }
+        await claimLegacyData(user.id);
+        if (!alive) return;
+        setUserId(user.id);
         setAuthState("ready");
       } catch (err) {
         console.error(err);
@@ -38,10 +50,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       }
     })();
 
+    // Signing out in another tab (or the session expiring) returns this tab to log in.
+    const { data: listener } = getSupabaseBrowserClient().auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT" && alive) {
+        setUserId(null);
+        useProfileStore.getState().setProfile(null);
+        router.replace("/login");
+      }
+    });
+
     return () => {
       alive = false;
+      listener.subscription.unsubscribe();
     };
-  }, [setUserId]);
+  }, [router, setUserId]);
 
   // 2) Load the profile for the signed-in user.
   useEffect(() => {
@@ -81,6 +103,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               name: data.name,
               age: data.age,
               occupation: data.occupation ?? undefined,
+              username: data.username ?? null,
               preferences: data.preferences ?? {},
               createdAt: data.created_at ?? new Date().toISOString(),
             }

@@ -6,6 +6,8 @@ export interface ProfileRecord {
   name: string;
   age: number;
   occupation: string | null;
+  /** Unique handle (lower-case letters, numbers, underscores). Set after sign-up. */
+  username?: string | null;
   preferences?: ProfilePreferences | null;
   created_at: string | null;
   updated_at: string | null;
@@ -96,5 +98,25 @@ export async function deleteProfile(userId: string): Promise<DbResult<null>> {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to delete profile.";
     return { data: null, error: message };
+  }
+}
+
+/** Update the editable profile fields (name, username, age, occupation). */
+export async function updateProfileDetails(
+  userId: string,
+  details: Pick<ProfileRecord, "name" | "age" | "occupation"> & { username: string }
+): Promise<DbResult<ProfileRecord>> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from("profiles")
+      .update({ ...details, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+    if (error) return { data: null, error: error.message };
+    return { data: data ?? null, error: null };
+  } catch (err) {
+    return { data: null, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }
