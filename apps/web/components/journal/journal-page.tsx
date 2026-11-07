@@ -1,14 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { Caveat, Literata } from "next/font/google";
+import localFont from "next/font/local";
 import { Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { toFirstPerson, type JournalStory } from "@/lib/journal-story";
 
-const hand = Caveat({ subsets: ["latin"], weight: ["500", "700"], display: "swap" });
-const serif = Literata({ subsets: ["latin"], weight: ["400", "500"], style: ["normal", "italic"], display: "swap" });
+// Bundled with the app (SIL OFL, see app/fonts) so builds never depend on fetching Google Fonts.
+const hand = localFont({ src: "../../app/fonts/caveat-latin-wght-normal.woff2", weight: "400 700", display: "swap" });
+const serif = localFont({
+  src: [
+    { path: "../../app/fonts/literata-latin-wght-normal.woff2", weight: "200 900", style: "normal" },
+    { path: "../../app/fonts/literata-latin-wght-italic.woff2", weight: "200 900", style: "italic" },
+  ],
+  display: "swap",
+});
 
 type JournalPageProps = {
   story: JournalStory;
