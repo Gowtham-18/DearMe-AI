@@ -7,14 +7,9 @@ import { Loader2 } from "lucide-react";
 
 import { AuthShell } from "@/components/auth/auth-parts";
 import { getSignedInUser } from "@/lib/auth";
-import { authErrorMessage } from "@/lib/auth-validation";
+import { authErrorMessage, safeNextPath } from "@/lib/auth-validation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
-/** Only same-site paths, so the link can't bounce someone to another website. */
-function safeNext(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return "/";
-  return value;
-}
 
 /** Google (and emailed links) return here with a one-time code, exchanged for a session (PKCE). */
 export default function AuthCallbackPage() {
@@ -41,7 +36,7 @@ export default function AuthCallbackPage() {
         }
       }
       const user = await getSignedInUser();
-      if (alive) router.replace(user ? safeNext(url.searchParams.get("next")) : "/login");
+      if (alive) router.replace(user ? safeNextPath(url.searchParams.get("next"), window.location.origin) : "/login");
     })();
     return () => {
       alive = false;

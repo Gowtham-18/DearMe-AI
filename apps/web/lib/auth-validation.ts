@@ -16,9 +16,11 @@ export function cleanText(value: string): string {
   return value.normalize("NFKC").replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
 }
 
+/** Keep in sync with public.is_reserved_username() (docs/db/schema-phase9-hardening.sql). */
 export const RESERVED_USERNAMES = new Set([
-  "admin", "administrator", "root", "support", "help", "dearme", "dearme_ai", "system", "moderator",
-  "staff", "official", "security", "privacy", "null", "undefined",
+  "admin", "administrator", "root", "support", "help", "dearme", "dearme_ai", "official", "moderator",
+  "mod", "staff", "system", "security", "privacy", "null", "undefined", "me", "you", "account",
+  "settings", "login", "signup", "api",
 ]);
 
 const COMMON_PASSWORDS = new Set([
@@ -161,4 +163,20 @@ export function authErrorMessage(error: { message?: string; status?: number; cod
   if (code === "signup_disabled") return "New sign-ups are paused right now.";
   if (message.includes("network") || message.includes("fetch")) return "We couldn't reach the server. Check your connection and try again.";
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * Where to go after signing in: only a path on this same site. Parsing with the URL parser
+ * (instead of string checks) also catches tricks like "/	evil.com", which browsers read as
+ * "//evil.com" because they drop tabs and newlines.
+ */
+export function safeNextPath(value: string | null | undefined, origin: string): string {
+  if (!value) return "/";
+  try {
+    const url = new URL(value, origin);
+    if (url.origin !== origin) return "/";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/";
+  }
 }

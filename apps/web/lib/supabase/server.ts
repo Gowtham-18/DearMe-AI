@@ -33,11 +33,20 @@ export async function getRequestContext(req: Request): Promise<RequestContext | 
   if (error || !data.user) {
     return NextResponse.json({ error: "Your session has ended. Refresh the page to continue." }, { status: 401 });
   }
+  // Guest (anonymous) sessions are sent to sign-up in the app; refuse them here too, so a
+  // script can't mint throwaway guests to get around per-user limits.
+  if (data.user.is_anonymous) {
+    return NextResponse.json({ error: "Create an account to keep journaling." }, { status: 403 });
+  }
 
   return { supabase, user: data.user };
 }
 
-/** Per-user limit backed by Postgres, so it holds across serverless instances. Fails open. */
+/**
+ * Per-user limit backed by Postgres, so it holds across serverless instances. Fails closed:
+ * if the check itself errors, the request is treated as over the limit, so a broken limiter
+ * can't turn into unlimited calls to the NLP service.
+ */
 export async function isRateLimited(
   supabase: SupabaseClient,
   bucket: string,
@@ -51,7 +60,7 @@ export async function isRateLimited(
   });
   if (error) {
     console.warn(`rate limit check unavailable (${error.code ?? "unknown"})`);
-    return false;
+    return true;
   }
   return data === false;
 }

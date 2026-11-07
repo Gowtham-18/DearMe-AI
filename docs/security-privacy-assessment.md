@@ -99,7 +99,7 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
 
 ### Medium
 
-**M1. No abuse protection on anonymous sign-up.**
+**M1. No abuse protection on anonymous sign-up.** _Mostly resolved (2026-11-07): the API refuses guest tokens and phase 9 blocks guest writes in the database. Remaining step: turn off anonymous sign-ins in the dashboard._
 - Rate limits are per user, and anyone can mint unlimited anonymous users. A script could therefore get past the limits and fill the database or keep the NLP service busy.
 - _Recommendation:_ turn on Supabase Auth CAPTCHA (Cloudflare Turnstile is free) for anonymous sign-ins, and check the per-IP limit on anonymous sign-ins in Auth → Rate Limits.
 
@@ -180,6 +180,50 @@ Full end-to-end encryption, where only the user holds the key, would rule out se
   - filters that block diagnosis, therapy or medication talk and "you should"
   - any failure falls back to the built-in reply
 - **Provider data use:** OpenAI's API doesn't train on API data by default, and keeps it up to 30 days for abuse monitoring. Groq and others have their own terms. Name the provider in the privacy notice before turning this on.
+
+## End-to-end security review (2026-11-07)
+
+Covered:
+- source review of the web app, API routes, NLP service and all SQL
+- dependency audits (`pnpm audit`, `pip-audit`)
+- a secret scan of the full git history
+- live, non-destructive tests against production, using two throwaway accounts that were deleted afterwards
+
+**Passed (93 live checks):**
+- **Isolation:** one user can't read, edit, delete, plant or re-own another user's rows. This holds through the API routes and through Supabase directly.
+- **Privileged functions:** every SECURITY DEFINER function checks the caller. Signed-out visitors can't reach any table or function. Internal tables (`rate_limits`, `app_settings`, `legacy_claims`) are closed even to signed-in users.
+- **API tokens:** routes refuse missing, garbage, forged and anon-key tokens.
+- **NLP service:**
+  - refuses every POST without the internal token
+  - `/docs` and `/openapi.json` are hidden
+  - no CORS access from other sites
+  - logs contain only ids and lengths
+- **Passwords:** the server enforces the password rules (not just the browser). Log-in errors don't reveal accounts.
+- **Headers:** HSTS (preload), frame blocking and nosniff are set.
+- **Secrets:** no secrets in git history, and the service key isn't used anywhere.
+- **SQL injection:** SQL-looking input is rejected or treated as text, and Supabase's gateway blocks obvious injection strings.
+
+**Found and fixed:**
+
+| Severity | Finding | Fix |
+|---|---|---|
+| Critical | Next.js 16.1.6 had published critical advisories (remote code execution in image optimisation / `use cache`, several denial-of-service and SSRF issues); 56 advisories across production dependencies | Next.js 16.4.5, Zod 4.6.7, patched transitive versions via `pnpm.overrides`: production audit now clean |
+| High | NLP service on Starlette 0.40 (via FastAPI 0.115) and python-dotenv 1.0.1 with known advisories | FastAPI 0.162.2, Starlette 1.10.0, Pydantic 2.14.3, Uvicorn 0.54.0, python-dotenv 1.2.4; startup moved to a lifespan handler |
+| Medium | Open redirect: `/auth/callback?next=/%09/evil.com` sent signed-in users to another site (browsers drop the tab and read `//evil.com`) | `safeNextPath()` parses with `URL` and only allows the same origin; unit-tested against 10 bypass forms |
+| Medium | Anonymous sign-ins still on: anyone could mint unlimited guests, each with fresh rate limits, and use the NLP-backed API or fill the database | API routes refuse guest tokens (403); phase 9 blocks guest inserts/updates in RLS; turn off anonymous sign-ins in the dashboard |
+| Medium | No size limits on browser-written text (a 1 MB entry was accepted) | Phase 9 check constraints: entries 100k chars, chat turns 8k, prompts 1k, JSON columns capped |
+| Low | A row could reference another user's session/entry id (e.g. a chat turn on someone else's session). Invisible to the owner, but it could block their analysis row for that entry. It also needed an unguessable UUID | Phase 9 restrictive "parent is mine" policies on `journal_turns`, `entry_analysis`, `journal_embeddings`, `theme_membership` |
+| Low | Reserved usernames (e.g. `admin`) could be set by writing to `profiles` directly | `is_reserved_username()` check constraint; the sign-up form uses the same list |
+| Low | Rate limiter failed open if its check errored | Fails closed |
+| Low | `X-Powered-By: Next.js` header | Removed |
+
+**Still open:**
+- **H2:** journal text is readable by database admins.
+- **M2:** CSP still allows inline scripts; a nonce-based CSP needs per-request rendering.
+- **M3:** crisis resources are US-centric.
+- **M5:** data residency notice.
+- **L5:** backups.
+- **Dev tooling:** one moderate dev-only advisory (`minimatch` 10 via eslint).
 
 ## Action checklist
 

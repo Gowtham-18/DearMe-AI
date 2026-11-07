@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Dict
 
@@ -57,12 +58,30 @@ MAX_ENTRIES_PER_REQUEST = int(os.getenv("MAX_ENTRIES_PER_REQUEST", "12"))
 MAX_THEME_ENTRIES = int(os.getenv("MAX_THEME_ENTRIES", "200"))
 INTERNAL_TOKEN = os.getenv("NLP_INTERNAL_TOKEN", "")
 
+
+def _warm_in_background() -> None:
+    warm_models()
+    logger.info("models ready status=%s llm_available=%s", models_status(), llm_available())
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Load models off the startup path so uvicorn binds the port immediately (hosts such as
+    # Render fail a deploy that doesn't open its port in time). A request that arrives
+    # before warm-up finishes waits for the same one-time load instead of starting another.
+    if not INTERNAL_TOKEN:
+        logger.warning("NLP_INTERNAL_TOKEN is not set: POST endpoints are open to anyone.")
+    threading.Thread(target=_warm_in_background, name="model-warmup", daemon=True).start()
+    yield
+
+
 app = FastAPI(
     title="DearMe NLP Service",
     version="0.4.0",
     docs_url=None if INTERNAL_TOKEN else "/docs",
     redoc_url=None,
     openapi_url=None if INTERNAL_TOKEN else "/openapi.json",
+    lifespan=lifespan,
 )
 
 cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
@@ -84,21 +103,6 @@ async def require_internal_token(request: Request, call_next):
         if not hmac.compare_digest(supplied.encode(), INTERNAL_TOKEN.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
-
-
-def _warm_in_background() -> None:
-    warm_models()
-    logger.info("models ready status=%s llm_available=%s", models_status(), llm_available())
-
-
-@app.on_event("startup")
-def start_model_warmup() -> None:
-    # Load models off the startup path so uvicorn binds the port immediately (hosts such as
-    # Render fail a deploy that doesn't open its port in time). A request that arrives
-    # before warm-up finishes waits for the same one-time load instead of starting another.
-    if not INTERNAL_TOKEN:
-        logger.warning("NLP_INTERNAL_TOKEN is not set: POST endpoints are open to anyone.")
-    threading.Thread(target=_warm_in_background, name="model-warmup", daemon=True).start()
 
 
 @app.get("/health")

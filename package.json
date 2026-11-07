@@ -16,6 +16,28 @@
     "test": "pnpm -r test"
   },
   "devDependencies": {
-    "concurrently": "9.2.1"
+    "concurrently": "10.0.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "ws": "^8.21.0",
+      "browserslist": "^4.28.7",
+      "source-map-js": "^1.2.2",
+      "baseline-browser-mapping": "^2.11.0",
+      "@babel/core": "^7.29.6",
+      "shell-quote": "^1.9.0",
+      "brace-expansion@1": "^1.1.13",
+      "brace-expansion@2": "^2.0.3",
+      "minimatch@3": "^3.1.4",
+      "minimatch@9": "^9.0.6",
+      "picomatch@2": "^2.3.2",
+      "picomatch@4": "^4.0.4",
+      "flatted": "^3.4.2",
+      "js-yaml@4": "^4.3.2",
+      "ajv@6": "^6.14.0",
+      "nanoid@3": "^3.3.18",
+      "@humanfs/node": "^0.16.8",
+      "postcss": "^8.5.23"
+    }
   }
 }

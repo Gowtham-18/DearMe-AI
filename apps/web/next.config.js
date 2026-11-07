@@ -22,6 +22,7 @@ const csp = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  poweredByHeader: false,
   transpilePackages: ["@dearme/shared"],
   turbopack: {
     root: path.join(__dirname, "..", ".."),

@@ -351,7 +351,8 @@ pnpm dev
    `schema-phase3.sql` (chat sessions), `schema-phase4.sql` (preferences), `schema-phase5.sql`
    (multiple sessions per day), `schema-phase6a-auth-prep.sql`, `schema-phase6b-rls.sql`,
    `schema-phase6c-hardening.sql`, `schema-phase7-memory.sql` (remembered people and plans), then
-   `schema-phase8-accounts.sql` (usernames and account deletion).
+   `schema-phase8-accounts.sql` (usernames and account deletion), then `schema-phase9-hardening.sql`
+   (size limits, reserved names, cross-user reference checks, no guest writes).
 3) Authentication: set up sign-in as described in **Accounts and sign-in (Phase 8)** below.
 4) Copy environment variables into `apps/web/.env.local`:
 ```
