@@ -36,6 +36,8 @@ from .responder import (
     AREA_TOPICS,
     LIFE_AREAS,
     REFLECTION_LEADS,
+    ADVICE_QUESTIONS,
+    WRAP_UP_QUESTION,
     area_label_to_topic,
     detect_area,
     area_stage,
@@ -50,6 +52,7 @@ from .responder import (
     wrap_up_due,
 )
 from .safety import CRISIS_RESOURCES
+from . import understanding
 
 PROMPT_PACKS = {
     "gentle": [
@@ -107,21 +110,8 @@ def _snippet(text: str, limit: int = 140) -> str:
 
 # --- guardrail vocabularies ---------------------------------------------------------------
 
-FEELING_CUES: Dict[str, Tuple[str, ...]] = {
-    "anxious": ("anxious", "anxiety", "nervous", "on edge", "worried", "worrying", "panicky", "uneasy"),
-    "stressed": ("stressed", "stress", "pressure", "overwhelmed", "swamped"),
-    "sad": ("sad", "feeling down", "felt down", "so down", "feeling low", "felt low", "hurt", "heartbroken", "upset", "crying", "cried"),
-    "tired": ("tired", "exhausted", "drained", "burned out", "burnt out", "worn out"),
-    "angry": ("angry", "frustrated", "irritated", "mad", "furious", "annoyed"),
-    "lonely": ("lonely", "alone", "isolated", "left out"),
-    "hopeful": ("hopeful", "optimistic", "encouraged"),
-    "calm": ("calm", "peaceful", "grounded", "at ease"),
-    "grateful": ("grateful", "thankful", "appreciative"),
-    "happy": ("happy", "glad", "joyful", "excited", "proud"),
-    "focused": ("focused", "clear-headed", "productive", "intentional"),
-}
-_FEELING_RES = {label: _word_re(words) for label, words in FEELING_CUES.items()}
-_FEELING_WORDS = {word for words in FEELING_CUES.values() for word in words} | {"worried", "worry"}
+FEELING_CUES = understanding.FEELING_CUES
+_FEELING_WORDS = understanding.FEELING_WORDS
 
 _EMOTIONAL_RE = _word_re(
     [word for words in FEELING_CUES.values() for word in words]
@@ -191,18 +181,27 @@ FOLLOW_UPS: Dict[str, Tuple[str, ...]] = {
     "grateful": ("What made that moment stand out?", "Who or what would you like to remember from it?"),
     "happy": ("What made that moment feel good?", "What do you want to remember about it?"),
     "focused": ("What made it easier to stay focused?", "What helped you get into that rhythm?"),
+    "overwhelmed": ("What's taking up the most room right now?", "If you could set one thing down for tonight, what would it be?"),
+    "hurt": ("What part of it hurt the most?", "What did you need in that moment that you didn't get?"),
+    "embarrassed": (
+        "What's the moment your mind keeps going back to?",
+        "What would you say to a friend who felt this way about the same moment?",
+    ),
+    "guilty": (
+        "What was going on for you right before it happened?",
+        "What do you wish you'd done differently?",
+        "What would help you make things right, or make peace with it?",
+    ),
+    "disappointed": ("What were you hoping would happen?", "What does that hope say about what matters to you?"),
+    "confused": ("What feels most unclear right now?", "What would help you see it a little more clearly?"),
+    "numb": ("When did you last feel something clearly?", "What has today been like, moment to moment?"),
+    "relieved": ("What lifted?", "What helped it turn out this way?"),
+    "proud": ("What are you proudest of?", "What did it take from you to get there?"),
+    "excited": ("What are you most looking forward to?", "What makes this feel so exciting?"),
 }
 def _infer_feeling(text: str) -> Optional[str]:
-    lowered = _norm(text)
-    best: Optional[Tuple[int, int, str]] = None
-    for label, pattern in _FEELING_RES.items():
-        matches = list(pattern.finditer(lowered))
-        if not matches:
-            continue
-        candidate = (-len(matches), matches[0].start(), label)
-        if best is None or candidate < best:
-            best = candidate
-    return best[2] if best else None
+    """The feeling the person named (negation, typos, emoji and Hinglish aware), or None."""
+    return understanding.first_feeling(text)
 
 
 def _is_off_topic(text: str) -> bool:
@@ -375,6 +374,14 @@ def _short_reply_plan(text: str, safety: dict) -> Optional[ReflectionPlan]:
             "We can keep it small.",
             "One tiny moment or sensation is enough.",
             "What is one small thing you noticed today?",
+            safety,
+        )
+    if lowered in {"fine", "i'm fine", "im fine", "good", "alright", "normal", "same", "same old", "busy", "not bad",
+                   "ok i guess", "okay i guess", "so so", "so-so", "decent", "average"}:
+        return _plan(
+            f"{lowered.capitalize() if lowered not in {'im fine', 'ok i guess', 'okay i guess'} else 'Fine'} can cover a lot.",
+            "", "", "",
+            "What's one moment from today that stood out, even a small one?",
             safety,
         )
     if lowered in {"wtf", "whatever"}:
@@ -690,9 +697,16 @@ def build_reflection_plan(
             safety = {"crisis": True, "reason": "Negative answer to a safety check-in."}
         return _crisis_plan(safety)
 
-    name_prefix = f"{user_name.split()[0]}, " if (user_name or "").strip() else ""
+    first_name = (user_name or "").split()[0] if (user_name or "").strip() else ""
+    name_prefix = f"{first_name}, " if first_name else ""
+    message = latest_user_message
 
-    if _contains_abuse(latest_user_message):
+    def with_name(text: str) -> str:
+        if not first_name or any(m.role == "assistant" and _norm(m.content) != _norm(selected_prompt or "") for m in history):
+            return text
+        return f"{first_name}, {text if text.startswith(('I ', 'I’', 'I' + chr(39))) else text[0].lower() + text[1:]}"
+
+    if _contains_abuse(message):
         return _plan(
             "I want to keep this space respectful. I'm here if you want to keep journaling.",
             "We can pause or reset and come back to your experience.",
@@ -700,9 +714,56 @@ def build_reflection_plan(
             "If you'd like, name what set that off.",
             "Do you want to continue with your journal?",
             safety,
+            signals={"intent": "abuse"},
         )
 
-    if _is_off_topic(latest_user_message):
+    prior_user = [m.content for m in history if m.role == "user" and m.content.strip()]
+    if prior_user and prior_user[-1].strip() == message.strip():
+        prior_user = prior_user[:-1]
+    prior_assistant = [m.content for m in history if m.role == "assistant" and m.content.strip()]
+    # The session opens with the chosen prompt as an assistant turn; that isn't a reply yet.
+    prior_replies = [t for t in prior_assistant if _norm(t) != _norm(selected_prompt or "")]
+    last_question = _last_question(prior_assistant[-1]) if prior_assistant else _last_question(selected_prompt or "")
+    resume = (selected_prompt or "").strip() if (selected_prompt or "").strip().endswith("?") and not prior_replies else ""
+
+    # Attempts to change the companion's instructions get a calm redirect, never compliance.
+    if understanding.is_injection(message):
+        return _plan(
+            "I'm here just for your journaling, so I'll stay with that.",
+            "", "", "",
+            resume or "What's been on your mind today?",
+            safety,
+            signals={"intent": "injection"},
+        )
+    if understanding.asks_identity(message):
+        return _plan(
+            with_name(
+                "I'm DearMe, a journaling companion. I'm not a person, but I'm here to help you put things into words, "
+                "and what you write stays yours."
+            ),
+            "", "", "",
+            resume or "What's on your mind right now?",
+            safety,
+            signals={"intent": "identity"},
+        )
+    if understanding.wants_listener(message):
+        return _plan(
+            with_name("Of course. I'm listening, and there's no right way to say it."),
+            "", "", "",
+            "What's been going on?",
+            safety,
+            signals={"intent": "listen"},
+        )
+    if understanding.declines(message):
+        return _plan(
+            with_name("That's completely okay. You don't have to get into it."),
+            "", "", "",
+            "Is there something else from today you'd rather write about?",
+            safety,
+            signals={"intent": "decline"},
+        )
+
+    if _is_off_topic(message):
         return _plan(
             f"{name_prefix}I'm here to support journaling and reflection.",
             "If you'd like, we can stay with how your day felt.",
@@ -710,93 +771,149 @@ def build_reflection_plan(
             "A few honest words is enough.",
             "What feels most important to name right now?",
             safety,
+            signals={"intent": "off_topic"},
         )
 
-    short_plan = _short_reply_plan(latest_user_message, safety)
-    if short_plan:
-        short_plan.reflection.text = short_plan.pattern_connection.text = short_plan.gentle_nudge.text = ""
-        if (user_name or "").strip() and not any(m.role == "assistant" for m in history):
-            text = short_plan.validation.text
-            short_plan.validation.text = f"{user_name.split()[0]}, {text if text.startswith('I') else text[0].lower() + text[1:]}"
-        return short_plan
+    # --- what the conversation is about so far -------------------------------------------------
+    context_text = " ".join(prior_user[-2:] + [message])
+    tones = [understanding.prompt_tone(selected_prompt or "")] + [understanding.tone(t) for t in prior_user[-3:]]
+    context_tone = next((t for t in reversed(tones) if t != "neutral"), "neutral")
+    current_event = understanding.detect_event(message)
+    event = current_event or next(
+        (found for text in reversed(prior_user) for found in [understanding.detect_event(text)] if found), None
+    )
+    event_first = (
+        next((i for i, text in enumerate(prior_user) if event.pattern.search(understanding.expand(text))), len(prior_user))
+        if event else len(prior_user)
+    )
+    area = conversation_area(message, prior_user)
+    topic_word = _conversation_topic(event, area, prior_user)
 
-    recent_user_text = [m.content for m in history if m.role == "user" and m.content.strip()]
-    if recent_user_text and recent_user_text[-1].strip() == latest_user_message.strip():
-        recent_user_text = recent_user_text[:-1]
-    context_text = " ".join(recent_user_text[-2:] + [latest_user_message])
+    # Short replies at the very start keep their simple openers; later they follow the thread.
+    if not prior_replies:
+        short_plan = _short_reply_plan(message, safety)
+        if short_plan:
+            short_plan.reflection.text = short_plan.pattern_connection.text = short_plan.gentle_nudge.text = ""
+            short_plan.validation.text = with_name(short_plan.validation.text)
+            return short_plan
+    elif understanding.dont_know(message) or _norm(message).strip(" .!?") in _FILLER_REPLIES or not message.strip(" .!?"):
+        heavy = context_tone == "negative"
+        options = (
+            [f"If you had to guess, what part of {topic_word} sits heaviest?"] if heavy and topic_word else []
+        ) + (
+            ["If you had to guess, what's the part that stays with you most?"] if heavy
+            else ["Even one small detail is enough. What comes to mind first?"]
+        ) + ["What's one small thing you noticed today?"]
+        return _plan(
+            "No rush." if _norm(message).strip(" .!?") in _FILLER_REPLIES else "That's okay, it doesn't have to be clear yet.",
+            "", "", "",
+            first_unasked(options, prior_assistant),
+            safety,
+            signals={"intent": "dont_know", "life_area": area.key if area else None},
+        )
 
     affect = analyze_affect(context_text)
-    keyphrases = extract_keyphrases(latest_user_message, top_n=6) or extract_keyphrases(context_text, top_n=6)
-    topic = _pick_topic(keyphrases, latest_user_message)
+    keyphrases = extract_keyphrases(message, top_n=6) or extract_keyphrases(context_text, top_n=6)
+    topic = _pick_topic(keyphrases, message)
 
     # Only claim a feeling the person named. The emotion model is used for longer messages only,
     # and never turned into "you're feeling X": two words like "my health" carry no feeling.
-    explicit_feeling = _infer_feeling(latest_user_message)
+    feelings = understanding.named_feelings(message)
+    explicit_feeling = feelings[0] if feelings else None
     feeling = explicit_feeling or _infer_feeling(context_text)
-    long_message = len(latest_user_message.split()) >= 8
+    long_message = len(message.split()) >= 8
     model_confident = long_message and affect.emotion_confidence >= 0.7
     if topic and feeling and feeling in topic:
         topic = None
-    shown = _topic_phrase(topic, latest_user_message) if topic else None
+    shown = _topic_phrase(topic, message) if topic else None
 
-    prior_user = [m.content for m in history if m.role == "user" and m.content.strip()]
-    if prior_user and prior_user[-1].strip() == latest_user_message.strip():
-        prior_user = prior_user[:-1]
-    prior_assistant = [m.content for m in history if m.role == "assistant" and m.content.strip()]
-    # The session opens with the chosen prompt as an assistant turn; that isn't a reply yet.
-    prior_replies = [t for t in prior_assistant if _norm(t) != _norm(selected_prompt or "")]
-
-    area = conversation_area(latest_user_message, prior_user)
-    stage = area_stage(prior_user, area, latest_user_message)
-    advice = asks_for_advice(latest_user_message)
-    positive = (explicit_feeling in POSITIVE_FEELINGS) or (
-        not explicit_feeling and model_confident and affect.emotion == "joy"
-    )
+    stage = area_stage(prior_user, area, message)
+    advice = asks_for_advice(message)
+    strength = understanding.shows_strength(message)
+    yes_no = understanding.yes_answer(message) or understanding.no_answer(message)
+    message_tone = understanding.tone(message)
+    if explicit_feeling:
+        positive = explicit_feeling in POSITIVE_FEELINGS
+    elif message_tone != "neutral":
+        positive = message_tone == "positive"
+    else:
+        positive = context_tone == "positive" or (model_confident and affect.emotion == "joy")
+    event_tone = understanding.event_tone(event, message, context_tone) if event else context_tone
+    if event and not explicit_feeling and message_tone == "neutral":
+        positive = event_tone == "positive"
+    grieving = area is not None and area.key == "loss"
+    if grieving:
+        positive, context_tone = False, "negative"  # a loss is never "a lovely moment"
+    noun = understanding.noun_answer(message) if (prior_replies or selected_prompt) else None
+    said_before = " ".join(_norm(t) for t in prior_assistant)
 
     # 1) Acknowledge: specific to what they named, never a stock "thanks for sharing".
-    if _contains_profanity(latest_user_message):
+    ack = ""
+    if _contains_profanity(message):
         ack = "That sounds really intense."
     elif advice:
         ack = "I can't tell you what's right for you, but we can think it through together."
-    elif explicit_feeling:
+    elif strength:
+        ack = (
+            "That preparation counts for a lot."
+            if re.search(r"practi[sc]ed|prepared|worked hard", _norm(message))
+            else next(
+                (line for line in ("It matters that you did that.", "That took real courage.", "That's no small thing.")
+                 if _norm(line) not in said_before),
+                "That took real courage.",
+            )
+        )
+    elif yes_no and last_question and understanding.is_yes_no_question(last_question):
+        ack = "Okay." if understanding.yes_answer(message) else "That's okay."
+    elif explicit_feeling and _norm(FEELING_ACKS.get(explicit_feeling, "")) not in said_before:
         ack = FEELING_ACKS.get(explicit_feeling, "")
-    elif area and (is_brief(latest_user_message) or stage == 0):
-        ack = pick(area.ack, latest_user_message)
+    elif grieving and not area.pattern.search(_norm(" ".join(prior_user))):
+        ack = pick(area.ack, message)
+    elif current_event and event_first == len(prior_user):
+        ack = event.acks[event_tone]
+    elif positive and not prior_replies:
+        ack = pick(("That sounds like a lovely moment.", "I love that."), message)
+    elif area and not positive and (is_brief(message) or stage == 0) and not area.pattern.search(_norm(" ".join(prior_user))):
+        ack = pick(area.ack, message)
     elif model_confident and affect.emotion in EMOTION_ACKS and not prior_assistant:
         ack = EMOTION_ACKS[affect.emotion]
-    else:
-        ack = ""
-    said_before = " ".join(_norm(t) for t in prior_assistant)
+    if not ack and grieving and re.search(r"\b(thinking about|think about|remember|miss|memories|memory)\b", _norm(message)):
+        ack = "Those memories can carry so much love."
+    if not ack and re.match(r"^i (don't|dont|do not) (know|understand) why", _norm(message)):
+        ack = "It's okay not to know why yet."
+    if not ack and "what if" in _norm(message):
+        ack = "Those 'what ifs' can get really loud."
     if ack and _norm(ack) in said_before:
         ack = ""
-    first_name = (user_name or "").split()[0] if (user_name or "").strip() else ""
-    if first_name and not prior_replies:
-        if not ack:
-            ack = pick(NEUTRAL_ACKS, latest_user_message)
-        keep_case = ack.startswith(("I ", "I'm", "I'"))
-        ack = f"{first_name}, {ack if keep_case else ack[0].lower() + ack[1:]}"
 
     # 2) Reflect their own words back (skipped for very short messages: nothing to reflect yet).
     reflection = ""
     last_reply = _norm(prior_assistant[-1]) if prior_assistant else ""
-    last_reflected = any(f"{lead.lower()} " in last_reply for lead in REFLECTION_LEADS)
-    if not is_brief(latest_user_message):
+    opened_with = lambda lead: any(part.startswith(f"{lead.lower()} ") for part in re.split(r"(?<=[.!?])\s+", last_reply))
+    last_reflected = any(opened_with(lead) for lead in REFLECTION_LEADS)
+    if not is_brief(message) and not yes_no:
         focus = [word for word in [topic or ""] + list(keyphrases[:3]) if word]
-        clause = reflect_clause(latest_user_message, focus, _PROFANITY_RE)
+        clause = reflect_clause(message, focus, _PROFANITY_RE)
         # Echoing a whole message back turn after turn reads as parroting; vary it.
-        echo = clause is not None and coverage(clause, latest_user_message) > 0.8
-        short_echo = echo and len(latest_user_message.split()) <= 8
+        echo = clause is not None and coverage(clause, message) > 0.8
+        short_echo = echo and len(message.split()) <= 8
         if area and area.key == "loss" and stage == 0:
             clause = None  # after "I'm so sorry", repeating the loss back reads as cold
+        if clause and re.match(r"^you('re| are) not\b", clause) and explicit_feeling:
+            clause = None  # "you're not sad" adds nothing once the real feeling is acknowledged
         if clause and not short_echo and not (last_reflected and echo):
-            leads = [lead for lead in REFLECTION_LEADS if f"{lead.lower()} " not in last_reply]
+            leads = [lead for lead in REFLECTION_LEADS if not opened_with(lead)]
             if "sound" in ack.lower():
                 leads = [lead for lead in leads if "sound" not in lead.lower()] or ["So"]
             reflection = f"{pick(leads, clause)} {clause}."
             reflection = reflection[0].upper() + reflection[1:]
     if not ack and not reflection:
         unused = [a for a in NEUTRAL_ACKS if _norm(a) not in said_before] or list(NEUTRAL_ACKS)
-        ack = pick(unused, latest_user_message)
+        ack = pick(unused, message)
+    if first_name and not prior_replies and not ack.startswith(first_name):
+        if not ack:
+            ack = pick(NEUTRAL_ACKS, message)
+        ack = with_name(ack)
 
     # 3) Connect to a past entry only when one really mentions the same thing, once per session.
     mentioned = _entries_mentioning(retrieved_entries, topic, 2)
@@ -815,27 +932,58 @@ def build_reflection_plan(
     if evidence_entries and not already_linked:
         quote = _snippet(evidence_entries[0].text, 70)
         if mentioned:
-            pattern = f"You've written about {shown} before: \u201c{quote}\u201d"
+            pattern = f"You've written about {shown} before: “{quote}”"
         else:
-            pattern = f"This echoes something you wrote recently: \u201c{quote}\u201d"
+            pattern = f"This echoes something you wrote recently: “{quote}”"
 
     # Otherwise, show it remembers who or what they just brought up (once per session).
     # prior_replies leaves out the opening prompt, which may itself be a memory follow-up.
     already_noted = any("'ve mentioned" in _norm(t) or "you mentioned your" in _norm(t) for t in prior_replies)
     if not pattern and memories and not already_noted:
         current = _parse_day(today) or datetime.now(timezone.utc).date()
-        pattern = memory_note(latest_user_message, memories, current) or ""
+        pattern = memory_note(message, memories, current) or ""
 
     # 4) One specific question that moves the conversation a step deeper.
-    options = question_candidates(
-        area=area,
-        stage=stage,
-        feeling=explicit_feeling,
-        feeling_follow_ups=FOLLOW_UPS.get(feeling or "", ()),
-        positive=positive,
-        advice=advice,
-        wrap_up=wrap_up_due(prior_user, time_budget),
+    options: List[str] = []
+    if wrap_up_due(prior_user, time_budget):
+        options.append(WRAP_UP_QUESTION)
+    if advice:
+        options.extend(ADVICE_QUESTIONS)
+    if noun and not current_event:
+        options.append(understanding.question_about(noun, selected_prompt or "", "positive" if positive else context_tone, prior_assistant))
+    if strength:
+        options.append(
+            "What would you want to remind yourself of right before it starts?"
+            if context_tone == "negative" or feeling in {"anxious", "stressed"}
+            else "What does that tell you about what you can handle?"
+        )
+    if yes_no and last_question and not understanding.is_yes_no_question(last_question):
+        options.append(
+            "What comes to mind first when you think back on it?" if positive else "Could you say a little more about that?"
+        )
+    elif understanding.yes_answer(message) and last_question and understanding.is_yes_no_question(last_question):
+        options.append("What comes to mind first?")
+    if explicit_feeling == "guilty" or (feeling == "guilty" and event and event.key == "conflict"):
+        options.extend(FOLLOW_UPS["guilty"])
+    if event:
+        event_stage = max(0, len(prior_user) - event_first) if current_event is None or event_first < len(prior_user) else 0
+        ladder = event.questions[event_tone if not positive or event_tone == "positive" else "positive"]
+        options.extend(ladder[min(event_stage, len(ladder) - 1):])
+    if explicit_feeling in {"embarrassed", "guilty", "hurt", "disappointed", "overwhelmed", "confused", "numb"}:
+        options.extend(FOLLOW_UPS.get(explicit_feeling, ()))
+    options.extend(
+        question_candidates(
+            area=None if positive and not (area and area.key == "loss") else area,
+            stage=stage,
+            feeling=explicit_feeling,
+            feeling_follow_ups=FOLLOW_UPS.get(feeling or "", ()),
+            positive=positive,
+            advice=False,
+            wrap_up=False,
+        )
     )
+    if "what if" in _norm(message):
+        options = [option for option in options if "worst" not in option]  # they just named it
     question = first_unasked(options, prior_assistant)
 
     return _plan(
@@ -848,16 +996,36 @@ def build_reflection_plan(
         evidence=evidence_cards,
         references=[card.entry_id for card in evidence_cards if card.entry_id],
         signals={
+            "intent": "reflect",
             "emotion": affect.emotion,
             "emotion_confidence": affect.emotion_confidence,
             "sentiment": {"label": affect.sentiment_label, "score": affect.sentiment_score},
             "keyphrases": keyphrases,
             "life_area": area.key if area else None,
+            "event": event.key if event else None,
+            "tone": "positive" if positive else context_tone,
             "stage": stage,
             "feeling": explicit_feeling,
             "degraded": affect.degraded,
         },
     )
+
+
+_FILLER_REPLIES = {"ok", "okay", "k", "kk", "hmm", "hmmm", "cool", "alright", "sure", "right", "mhm"}
+
+
+def _last_question(message: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", " ".join((message or "").split()))
+    return next((s for s in reversed(sentences) if s.endswith("?")), "")
+
+
+def _conversation_topic(event, area, prior_user: Sequence[str]) -> str:
+    """A short name for what the conversation is about ("the interview", "work"), or ""."""
+    if event and event.key in {"interview", "exam", "presentation", "breakup"}:
+        return {"interview": "the interview", "exam": "the exam", "presentation": "the presentation", "breakup": "the breakup"}[event.key]
+    if area:
+        return AREA_TOPICS.get(area.key, "")
+    return ""
 
 
 def render_plan_to_message(plan: ReflectionPlan) -> RenderedMessage:

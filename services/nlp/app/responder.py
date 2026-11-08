@@ -223,6 +223,8 @@ GENERIC_STAGES: Tuple[Tuple[str, ...], ...] = (
     ("Is there one small thing that might help, even a little?", "What would make tomorrow feel a bit lighter?"),
 )
 POSITIVE_QUESTIONS = (
+    "What made that moment stand out?",
+    "What did it mean to you?",
     "What made it feel so good?",
     "What do you want to remember about this?",
     "What does this tell you about what matters to you?",
@@ -235,7 +237,7 @@ ADVICE_QUESTIONS = (
 )
 WRAP_UP_QUESTION = "Before you wrap up, what's one thing you want to take away from writing this today?"
 
-POSITIVE_FEELINGS = {"hopeful", "calm", "grateful", "happy", "focused"}
+POSITIVE_FEELINGS = {"hopeful", "relieved", "calm", "grateful", "proud", "excited", "happy", "focused"}
 FEELING_ACKS = {
     "anxious": "That sounds really unsettling.",
     "stressed": "That's a lot to carry.",
@@ -248,6 +250,16 @@ FEELING_ACKS = {
     "grateful": "That sounds like a meaningful moment.",
     "happy": "That's lovely to hear.",
     "focused": "That sounds like a good rhythm.",
+    "overwhelmed": "That sounds like a lot to hold all at once.",
+    "hurt": "That sounds like it really hurt.",
+    "embarrassed": "Embarrassment can sting long after the moment has passed.",
+    "guilty": "Guilt can be a heavy thing to sit with.",
+    "disappointed": "Disappointment like that can really knock the wind out of you.",
+    "confused": "It's hard when things feel this unclear.",
+    "numb": "Feeling flat or numb can be its own kind of hard.",
+    "relieved": "That sounds like a weight lifting.",
+    "proud": "You've got every reason to feel proud of that.",
+    "excited": "I love the excitement in that.",
 }
 EMOTION_ACKS = {  # only used for longer messages where the emotion model is confident
     "sadness": "That sounds heavy.",
@@ -264,13 +276,19 @@ _ADVICE_RE = re.compile(
 )
 _SUBJECT_START_RE = re.compile(
     r"^(i|i'm|im|i've|i'd|i'll|my|our|we|we're|the|this|that|it|it's|he|she|they|his|her|their|everyone|"
-    r"nobody|someone|everything|nothing|work|today|yesterday)\b"
+    r"nobody|someone|everything|nothing|work|today|yesterday|me and)\b"
 )
 _LEADING_CONJUNCTION_RE = re.compile(r"^(and|but|so|because|though|also|then|plus|anyway|well|honestly)\s+")
 _HEDGE_RE = re.compile(r"^(i guess|i think|i suppose|i mean|maybe|honestly|really|just)\s+")
 _FLIPS = (
     (re.compile(r"\bi feel like\b"), "you feel"),
-    (re.compile(r"\bmy ([a-z'-]+) and i\b"), r"you and your \1"),
+    (
+        re.compile(
+            r"\bmy (wife|husband|partner|mom|mum|mother|dad|father|parents|sister|brother|friend|friends|boyfriend|"
+            r"girlfriend|family|kids|son|daughter|boss|manager|roommate|colleague|team|cousin|fiance|fiancee) and i\b"
+        ),
+        r"you and your \1",
+    ),
     (re.compile(r"\bme and my\b"), "you and your"),
     (re.compile(r"\bi was\b"), "you were"),
     (re.compile(r"\bi am\b"), "you are"),
@@ -283,6 +301,10 @@ _FLIPS = (
     (re.compile(r"\bmy\b"), "your"),
     (re.compile(r"\bme\b"), "you"),
     (re.compile(r"\bi\b"), "you"),
+    (re.compile(r"\bwe're\b"), "you're"),
+    (re.compile(r"\bwe\b"), "you"),
+    (re.compile(r"\bour\b"), "your"),
+    (re.compile(r"\bus\b"), "you"),
 )
 
 
@@ -327,36 +349,51 @@ def asks_for_advice(text: str) -> bool:
     return bool(_ADVICE_RE.search(_norm(text)))
 
 
+_CASE_FLIPS = tuple(
+    # "us" stays case-sensitive so "the US" isn't flipped.
+    (pattern if pattern.pattern == r"\bus\b" else re.compile(pattern.pattern, re.IGNORECASE), replacement)
+    for pattern, replacement in _FLIPS
+)
+# Clauses about what the person feels, knows or needs say more than scene-setting ones.
+_INNER_RE = re.compile(r"\b(feel|felt|know|knew|think|miss|want|need|wish|can't|couldn't|don't|didn't|froze|keep)\b")
+
+
 def flip_to_second_person(clause: str) -> str:
-    flipped = _norm(clause)
-    for pattern, replacement in _FLIPS:
+    """'my manager yelled at me' -> 'your manager yelled at you', keeping other words' capitals."""
+    flipped = " ".join(clause.replace("’", "'").replace("‘", "'").split())
+    for pattern, replacement in _CASE_FLIPS:
         flipped = pattern.sub(replacement, flipped)
     return flipped
 
 
 def reflect_clause(text: str, focus_words: Sequence[str], banned: re.Pattern[str]) -> Optional[str]:
     """The clause that best carries what the person said, in second person, or None."""
-    lowered = _norm(text)
-    parts = re.split(r"[.!?;\n]+|,\s+|\s+but\s+|\s+-+\s+|\s+—\s+", lowered)
+    original = " ".join(text.replace("’", "'").replace("‘", "'").split())
+    parts = re.split(r"[.!?;\n]+|,\s+|\s+but\s+|\s+-+\s+|\s+—\s+", original, flags=re.IGNORECASE)
     best: Optional[Tuple[int, str]] = None
     for raw in parts:
-        clause = _LEADING_CONJUNCTION_RE.sub("", raw.strip(" \"'")).strip()
-        clause = _HEDGE_RE.sub("", clause).strip()
+        clause = raw.strip(" \"'")
+        clause = re.sub(_LEADING_CONJUNCTION_RE.pattern, "", clause, flags=re.IGNORECASE).strip()
+        clause = re.sub(_HEDGE_RE.pattern, "", clause, flags=re.IGNORECASE).strip()
+        lowered = clause.lower()
         words = clause.split()
-        if not (3 <= len(words) <= 20) or banned.search(clause) or not _SUBJECT_START_RE.match(clause):
+        if not (3 <= len(words) <= 20) or banned.search(lowered) or not _SUBJECT_START_RE.match(lowered):
             continue
-        score = sum(3 for word in focus_words if word and re.search(rf"\b{re.escape(word)}\b", clause))
+        score = sum(3 for word in focus_words if word and re.search(rf"\b{re.escape(word)}\b", lowered))
         score += 1 if 5 <= len(words) <= 16 else 0
+        score += 2 if _INNER_RE.search(lowered) else 0
         if best is None or score > best[0]:
             best = (score, clause)
     if not best:
         return None
-    return flip_to_second_person(best[1])
+    flipped = flip_to_second_person(best[1])
+    # Every candidate starts with a common subject word ("I", "my", "the"), so lower-casing is safe.
+    return flipped[0].lower() + flipped[1:]
 
 
 def area_stage(history_user_messages: Sequence[str], area: Optional[LifeArea], message: str) -> int:
     """How far into this topic the conversation is (0-3)."""
-    if is_brief(message):
+    if is_brief(message) and not history_user_messages:
         return 0
     if area is None:
         stage = len(history_user_messages)
@@ -448,7 +485,9 @@ AREA_TOPICS = {  # reads naturally inside a prompt: "What part of {topic} feels 
 FEELING_NOUNS = {
     "anxious": "worry", "stressed": "stress", "sad": "sadness", "tired": "exhaustion", "angry": "frustration",
     "lonely": "loneliness", "hopeful": "hope", "calm": "calm", "grateful": "gratitude", "happy": "joy",
-    "focused": "focus",
+    "focused": "focus", "overwhelmed": "overwhelm", "hurt": "hurt", "embarrassed": "embarrassment", "guilty": "guilt",
+    "disappointed": "disappointment", "confused": "uncertainty", "numb": "numbness", "relieved": "relief", "proud": "pride",
+    "excited": "excitement",
 }
 _KEYWORD_NOISE = {
     "feel", "feeling", "felt", "feels", "week", "day", "days", "today", "tonight", "morning", "evening",
