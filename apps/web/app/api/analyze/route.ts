@@ -6,6 +6,7 @@ import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabas
 import { callNlp, EMBEDDING_DIM, parseEmbedding, serializeEmbedding } from "@/lib/nlp";
 import { moodToNumeric } from "@/lib/moods";
 import { memoryEnabled } from "@/lib/memory";
+import { isJournalLocked, unlockRequired } from "@/lib/journal-lock-server";
 
 export const maxDuration = 60;
 
@@ -30,6 +31,47 @@ export async function POST(req: Request) {
     .maybeSingle();
   if (!entry) {
     return NextResponse.json({ error: "Entry not found." }, { status: 404 });
+  }
+
+  // A locked entry is ciphertext here: analyse the text the browser decrypted, and hand the results
+  // back for the browser to encrypt and save. Only the mood label (not encrypted) is saved here.
+  const locked = (await isJournalLocked(supabase, user.id)) ? parsed.data.locked : null;
+  if (locked === undefined) return unlockRequired();
+  if (locked) {
+    const result = await callNlp(
+      "/analyze-entry",
+      {
+        user_id: user.id,
+        entry_id: entry.id,
+        text: locked.text,
+        mood: entry.mood,
+        created_at: entry.created_at,
+        entry_date: entry.entry_date,
+      },
+      20000,
+      analyzeEntryResponseSchema
+    );
+    if (!result.ok) {
+      return NextResponse.json({ error: "Insights are unavailable right now." }, { status: 502 });
+    }
+    const analysis = result.data;
+    const mood = entry.mood ?? analysis.mood_suggestion ?? null;
+    if (!entry.mood && analysis.mood_suggestion) {
+      await supabase.from("entries").update({ mood: analysis.mood_suggestion }).eq("id", entry.id);
+    }
+    return NextResponse.json({
+      status: "ok",
+      degraded: analysis.degraded,
+      warnings: [],
+      locked_result: {
+        sentiment: analysis.sentiment,
+        mood_numeric: moodToNumeric(mood),
+        keyphrases: analysis.keyphrases,
+        safety: analysis.safety,
+        memories: (await memoryEnabled(supabase, user.id)) ? analysis.memories : [],
+        embedding: analysis.embedding.length === EMBEDDING_DIM ? analysis.embedding : null,
+      },
+    });
   }
 
   const result = await callNlp(

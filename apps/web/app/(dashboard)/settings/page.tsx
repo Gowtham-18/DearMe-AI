@@ -23,6 +23,8 @@ import { listSessions, listTurnsByUser } from "@/lib/db/sessions";
 import { deleteMyData } from "@/lib/db/cleanup";
 import { listMemories } from "@/lib/db/memories";
 import MemoryCard from "@/components/settings/memory-card";
+import JournalLockCard from "@/components/journal-lock/journal-lock-card";
+import { vaultDeleted } from "@/lib/crypto/vault";
 import CrisisResources from "@/components/crisis-resources";
 
 export default function SettingsPage() {
@@ -181,6 +183,8 @@ export default function SettingsPage() {
       return;
     }
 
+    // The wrapped journal key was deleted with everything else.
+    await vaultDeleted();
     setProfile(null);
     setConfirmOpen(false);
     setDeleting(false);
@@ -232,15 +236,19 @@ export default function SettingsPage() {
         onToggle={handleMemoryToggle}
       />
 
+      <JournalLockCard userId={profile?.user_id ?? null} />
+
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Privacy & Safety</CardTitle>
+          <CardTitle className="text-base">Privacy &amp; data</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-sm text-muted-foreground">
           <p>
-            Your journal is private to you. You're signed in anonymously on this browser, and the
-            database only returns rows that belong to your account. Clearing this browser&apos;s data
-            signs you out, so export first if you want a copy.
+            Your journal is private to your account: the database only returns rows that belong to you. Export a copy
+            anytime, or delete everything for good.{" "}
+            <a href="/privacy" className="font-medium text-primary hover:underline">
+              Read the privacy notice
+            </a>
           </p>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={handleExport} disabled={exporting}>

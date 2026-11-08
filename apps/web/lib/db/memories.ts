@@ -1,5 +1,12 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbListResult, DbResult } from "@/lib/db/types";
+import { openText } from "@/lib/crypto/vault";
+
+export const openMemory = async <T extends { label: string; detail: string | null }>(row: T): Promise<T> => ({
+  ...row,
+  label: await openText(row.label),
+  detail: await openText(row.detail),
+});
 
 export interface MemoryFactRecord {
   id: string;
@@ -31,7 +38,7 @@ export async function listMemories(userId: string, limit = 100): Promise<DbListR
       .order("last_seen", { ascending: false })
       .limit(limit);
     if (error) return { data: [], error: error.message };
-    return { data: (data ?? []) as MemoryFactRecord[], error: null };
+    return { data: await Promise.all(((data ?? []) as MemoryFactRecord[]).map(openMemory)), error: null };
   } catch (err) {
     return { data: [], error: err instanceof Error ? err.message : "Failed to load what DearMe remembers." };
   }

@@ -255,7 +255,8 @@ export default function SignUpPage() {
           </Button>
           <p className="text-center text-xs text-muted-foreground">
             We&apos;ll email you a code to confirm it&apos;s you. Your password is stored only as a secure hash by our
-            sign-in provider; DearMe never sees it.
+            sign-in provider; DearMe never sees it. See the{" "}
+            <Link href="/privacy" className="font-medium text-foreground underline-offset-4 hover:underline">privacy notice</Link>.
           </p>
         </form>
       </div>

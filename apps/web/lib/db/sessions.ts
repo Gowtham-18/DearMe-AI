@@ -1,5 +1,16 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbListResult, DbResult } from "@/lib/db/types";
+import { openText, sealText } from "@/lib/crypto/vault";
+
+// Journal lock: the chosen prompt and every message are stored encrypted and decrypted here.
+const openSession = async (row: JournalSessionRecord): Promise<JournalSessionRecord> => ({
+  ...row,
+  selected_prompt_text: await openText(row.selected_prompt_text),
+});
+const openTurn = async (row: JournalTurnRecord): Promise<JournalTurnRecord> => ({
+  ...row,
+  content: await openText(row.content),
+});
 
 export interface JournalSessionRecord {
   id: string;
@@ -43,7 +54,7 @@ export async function getActiveSession(
       return { data: null, error: error.message };
     }
 
-    return { data: data ?? null, error: null };
+    return { data: data ? await openSession(data as JournalSessionRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load session.";
     return { data: null, error: message };
@@ -63,7 +74,7 @@ export async function createSession(
 ): Promise<DbResult<JournalSessionRecord>> {
   try {
     const supabase = getSupabaseBrowserClient();
-    const insertPayload = { ...payload };
+    const insertPayload = { ...payload, selected_prompt_text: await sealText(payload.selected_prompt_text) };
     if (insertPayload.title == null) {
       delete insertPayload.title;
     }
@@ -109,7 +120,7 @@ export async function createSession(
       }
       return { data: null, error: message };
     }
-    return { data: data ?? null, error: null };
+    return { data: data ? await openSession(data as JournalSessionRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to start session.";
     return { data: null, error: message };
@@ -129,7 +140,7 @@ export async function getSession(sessionId: string): Promise<DbResult<JournalSes
       return { data: null, error: error.message };
     }
 
-    return { data: data ?? null, error: null };
+    return { data: data ? await openSession(data as JournalSessionRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load session.";
     return { data: null, error: message };
@@ -155,7 +166,7 @@ export async function updateSessionStatus(
     if (error) {
       return { data: null, error: error.message };
     }
-    return { data: data ?? null, error: null };
+    return { data: data ? await openSession(data as JournalSessionRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to update session.";
     return { data: null, error: message };
@@ -175,7 +186,7 @@ export async function listTurns(sessionId: string): Promise<DbListResult<Journal
       return { data: [], error: error.message };
     }
 
-    return { data: data ?? [], error: null };
+    return { data: await Promise.all(((data ?? []) as JournalTurnRecord[]).map(openTurn)), error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load turns.";
     return { data: [], error: message };
@@ -189,14 +200,14 @@ export async function createTurn(
     const supabase = getSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("journal_turns")
-      .insert(payload)
+      .insert({ ...payload, content: await sealText(payload.content) })
       .select("*")
       .maybeSingle();
 
     if (error) {
       return { data: null, error: error.message };
     }
-    return { data: data ?? null, error: null };
+    return { data: data ? await openTurn(data as JournalTurnRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save turn.";
     return { data: null, error: message };
@@ -220,7 +231,7 @@ export async function listSessions(
       return { data: [], error: error.message };
     }
 
-    return { data: data ?? [], error: null };
+    return { data: await Promise.all(((data ?? []) as JournalSessionRecord[]).map(openSession)), error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load sessions.";
     return { data: [], error: message };
@@ -244,7 +255,7 @@ export async function listTurnsByUser(
       return { data: [], error: error.message };
     }
 
-    return { data: data ?? [], error: null };
+    return { data: await Promise.all(((data ?? []) as JournalTurnRecord[]).map(openTurn)), error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load turns.";
     return { data: [], error: message };

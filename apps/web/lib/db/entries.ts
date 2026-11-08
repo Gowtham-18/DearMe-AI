@@ -1,5 +1,11 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbListResult, DbResult } from "@/lib/db/types";
+import { openText, sealText } from "@/lib/crypto/vault";
+
+/** Journal lock: entry text is stored encrypted and decrypted here, in the browser. */
+export async function openEntry<T extends { content: string }>(row: T): Promise<T> {
+  return { ...row, content: await openText(row.content) };
+}
 
 export interface EntryRecord {
   id: string;
@@ -30,7 +36,7 @@ export async function getEntry(id: string): Promise<DbResult<EntryRecord>> {
     if (error) {
       return { data: null, error: error.message };
     }
-    return { data: data ?? null, error: null };
+    return { data: data ? await openEntry(data as EntryRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load entry.";
     return { data: null, error: message };
@@ -50,7 +56,7 @@ export async function getEntryForSession(sessionId: string): Promise<DbResult<En
     if (error) {
       return { data: null, error: error.message };
     }
-    return { data: data ?? null, error: null };
+    return { data: data ? await openEntry(data as EntryRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load entry.";
     return { data: null, error: message };
@@ -76,7 +82,7 @@ export async function getEntryForDate(
       return { data: null, error: error.message };
     }
 
-    return { data: data ?? null, error: null };
+    return { data: data ? await openEntry(data as EntryRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load entry.";
     return { data: null, error: message };
@@ -103,7 +109,7 @@ export async function listEntries(
       return { data: [], error: error.message };
     }
 
-    return { data: data ?? [], error: null };
+    return { data: await Promise.all(((data ?? []) as EntryRecord[]).map(openEntry)), error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to list entries.";
     return { data: [], error: message };
@@ -117,7 +123,7 @@ export async function createEntry(
     const supabase = getSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("entries")
-      .insert(payload)
+      .insert({ ...payload, content: await sealText(payload.content) })
       .select("*")
       .maybeSingle();
 
@@ -125,7 +131,7 @@ export async function createEntry(
       return { data: null, error: error.message };
     }
 
-    return { data: data ?? null, error: null };
+    return { data: data ? await openEntry(data as EntryRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save entry.";
     return { data: null, error: message };
@@ -140,7 +146,7 @@ export async function updateEntry(
     const supabase = getSupabaseBrowserClient();
     const { data, error } = await supabase
       .from("entries")
-      .update(updates)
+      .update(updates.content === undefined ? updates : { ...updates, content: await sealText(updates.content) })
       .eq("id", id)
       .select("*")
       .maybeSingle();
@@ -149,7 +155,7 @@ export async function updateEntry(
       return { data: null, error: error.message };
     }
 
-    return { data: data ?? null, error: null };
+    return { data: data ? await openEntry(data as EntryRecord) : null, error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to update entry.";
     return { data: null, error: message };

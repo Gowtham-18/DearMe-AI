@@ -8,67 +8,22 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import ThemeToggle from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/auth/auth-parts";
-import {
-  HowItWorksIllustration,
-  PatternsIllustration,
-  PrivateIllustration,
-  RememberIllustration,
-  WriteIllustration,
-} from "@/components/auth/illustrations";
+import { ListenScene, PageScene, PatternsScene, PrivateScene } from "@/components/onboarding/welcome-scenes";
 import { getSignedInUser, isGuest, markWelcomeSeen } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 type Slide = {
-  eyebrow: string;
   title: string;
-  body?: string;
-  steps?: string[];
-  points?: string[];
-  Illustration: (props: { className?: string }) => React.ReactElement;
+  body: string;
+  Scene: (props: { playing: boolean; className?: string }) => React.ReactElement;
 };
 
+// Few words, one idea per slide: the scenes do the explaining.
 const SLIDES: Slide[] = [
-  {
-    eyebrow: "Welcome to DearMe",
-    title: "A journal that listens",
-    body: "Write a few lines and DearMe answers with one thoughtful question at a time, so you go a little deeper than you would on your own.",
-    Illustration: WriteIllustration,
-  },
-  {
-    eyebrow: "How it works",
-    title: "Five minutes is enough",
-    steps: [
-      "Pick how you feel and how much time you have.",
-      "Choose a prompt. Each one shows an example answer.",
-      "Answer one question at a time, and finish whenever you're ready.",
-      "Read it back later as a page in your journal.",
-    ],
-    Illustration: HowItWorksIllustration,
-  },
-  {
-    eyebrow: "Insights",
-    title: "See your patterns",
-    body: "Insights show the tone of your writing over time, the themes that keep coming up, and a short reflection on your week.",
-    Illustration: PatternsIllustration,
-  },
-  {
-    eyebrow: "Memory",
-    title: "Remembers what matters",
-    body: "Mention “my interview on Friday” and DearMe can ask how it went afterwards. You can see, and forget, everything it remembers.",
-    Illustration: RememberIllustration,
-  },
-  {
-    eyebrow: "Privacy",
-    title: "Private by design",
-    points: [
-      "Only your account can read your journal.",
-      "Never used to train AI models.",
-      "Analysis runs on DearMe's own server with open-source models.",
-      "Outside AI is used only if you turn on AI replies.",
-      "Export or delete everything at any time.",
-    ],
-    Illustration: PrivateIllustration,
-  },
+  { title: "Write a little. It listens.", body: "One thoughtful question at a time.", Scene: ListenScene },
+  { title: "Every entry becomes a page", body: "Your answers, written out as one journal entry.", Scene: PageScene },
+  { title: "See what keeps coming up", body: "Moods, themes and a note on your week.", Scene: PatternsScene },
+  { title: "Yours alone", body: "Private to you, with an optional passphrase lock. Export or delete it anytime.", Scene: PrivateScene },
 ];
 
 export default function WelcomePage() {
@@ -138,32 +93,14 @@ export default function WelcomePage() {
                 aria-hidden={i !== index}
                 inert={i !== index}
               >
-                <slide.Illustration className="mx-auto w-full max-w-[18rem] md:max-w-sm" />
-                <div className="space-y-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">{slide.eyebrow}</p>
+                <slide.Scene playing={i === index} className="mx-auto w-full max-w-[17rem] sm:max-w-xs md:max-w-sm" />
+                <div className={cn("welcome-copy space-y-3 text-center md:text-left", i === index && "is-playing")}>
                   <h1 className="text-3xl font-semibold tracking-tight text-balance text-foreground sm:text-4xl">{slide.title}</h1>
-                  {slide.body && <p className="max-w-prose text-base text-muted-foreground">{slide.body}</p>}
-                  {slide.steps && (
-                    <ol className="space-y-3">
-                      {slide.steps.map((step, n) => (
-                        <li key={step} className="flex gap-3 text-sm text-foreground sm:text-base">
-                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-divider bg-card text-xs font-semibold tabular-nums">
-                            {n + 1}
-                          </span>
-                          <span className="pt-0.5">{step}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                  {slide.points && (
-                    <ul className="space-y-2.5">
-                      {slide.points.map((point) => (
-                        <li key={point} className="flex gap-3 text-sm text-foreground sm:text-base">
-                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
-                          {point}
-                        </li>
-                      ))}
-                    </ul>
+                  <p className="text-lg text-muted-foreground">{slide.body}</p>
+                  {i === SLIDES.length - 1 && (
+                    <Link href="/privacy" className="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline">
+                      How we protect your journal
+                    </Link>
                   )}
                 </div>
               </section>

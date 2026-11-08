@@ -22,6 +22,13 @@ CRISIS_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("cant_go_on", re.compile(r"\b(can'?t|cannot)\s+go\s+on\b")),
     ("dont_want_to_live", re.compile(r"\bdon'?t\s+want\s+to\s+(be\s+alive|live|exist|be\s+here\s+anymore|wake\s+up)\b")),
     ("overdose", re.compile(r"\boverdos(e|ed|ing)\b")),
+    # Passive ideation: easy to miss, important to meet with a gentle check-in.
+    ("if_i_were_gone", re.compile(r"\b(if|when)\s+i\s+(disappeared|was\s+gone|were\s+gone|died|was\s+dead|wasn'?t\s+(here|around)|weren'?t\s+(here|around))\b")),
+    ("want_to_disappear", re.compile(r"\bwant\s+to\s+(disappear|vanish|not\s+exist)\b")),
+    ("no_point_living", re.compile(r"\b(no|what'?s\s+the|what\s+is\s+the)\s+point\s+(in|of)\s+(living|life|being\s+alive|going\s+on|anything)\b")),
+    ("not_worth_living", re.compile(r"\b(life\s+is\s+)?not\s+worth\s+living\b")),
+    ("sleep_forever", re.compile(r"\b(sleep\s+forever|never\s+wake\s+up)\b")),
+    ("slang", re.compile(r"\b(kms|unalive|unaliving)\b")),
 )
 
 CRISIS_RESOURCES = (

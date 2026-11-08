@@ -13,6 +13,12 @@ const CRISIS_PATTERNS: RegExp[] = [
   /\b(can'?t|cannot)\s+go\s+on\b/,
   /\bdon'?t\s+want\s+to\s+(be\s+alive|live|exist|be\s+here\s+anymore|wake\s+up)\b/,
   /\boverdos(e|ed|ing)\b/,
+  /\b(if|when)\s+i\s+(disappeared|was\s+gone|were\s+gone|died|was\s+dead|wasn'?t\s+(here|around)|weren'?t\s+(here|around))\b/,
+  /\bwant\s+to\s+(disappear|vanish|not\s+exist)\b/,
+  /\b(no|what'?s\s+the|what\s+is\s+the)\s+point\s+(in|of)\s+(living|life|being\s+alive|going\s+on|anything)\b/,
+  /\b(life\s+is\s+)?not\s+worth\s+living\b/,
+  /\b(sleep\s+forever|never\s+wake\s+up)\b/,
+  /\b(kms|unalive|unaliving)\b/,
 ];
 
 export const CRISIS_MESSAGE =

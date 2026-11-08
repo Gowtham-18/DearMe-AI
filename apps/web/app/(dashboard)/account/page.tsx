@@ -302,6 +302,8 @@ export default function AccountPage() {
           <p>
             Export your data, manage memory and AI replies in{" "}
             <Link href="/settings" className="font-medium text-foreground underline-offset-4 hover:underline">Privacy &amp; Safety</Link>.
+            Read the full{" "}
+            <Link href="/privacy" className="font-medium text-foreground underline-offset-4 hover:underline">privacy notice</Link>.
           </p>
         </CardContent>
       </Card>

@@ -86,3 +86,34 @@ test("helpers", () => {
   assert.equal(lastQuestion("That sounds hard. What helped? Take your time."), "What helped?");
   assert.equal(lastQuestion("Thanks for sharing."), null);
 });
+
+test("answers are woven into the prompt they answer", () => {
+  const heavy = composeJournal("What made you feel heavy today?", [turn("user", "I performed bad in interview")]);
+  assert.deepEqual(heavy.paragraphs, ["I felt heavy today because I performed badly in the interview."]);
+  assert.equal(heavy.openingJoined, true);
+
+  const hard = composeJournal("What made today hard?", [
+    turn("user", "my best friend didn't invite me to her birthday"),
+    turn("assistant", "That sounds like it really hurt. What part of it hurt the most?"),
+    turn("user", "Seeing the pictures"),
+  ]);
+  assert.deepEqual(hard.paragraphs, [
+    "Today was hard because my best friend didn't invite me to her birthday. The part that hurt the most was seeing the pictures.",
+  ]);
+
+  assert.equal(
+    composeJournal("What made you smile today?", [turn("user", "my dog")]).paragraphs[0],
+    "My dog made me smile today."
+  );
+  assert.equal(
+    composeJournal("What's one small thing that went right today?", [turn("user", "I finally went to the gym")]).paragraphs[0],
+    "One small thing that went right today was that I finally went to the gym."
+  );
+});
+
+test("open prompts keep the answer as written", () => {
+  const story = composeJournal("How was your day?", [turn("user", "Long, but the evening walk helped.")]);
+  assert.equal(story.openingJoined, false);
+  assert.deepEqual(story.paragraphs, ["Long, but the evening walk helped."]);
+  assert.equal(toFirstPerson("What made you feel heavy today?"), "What made me feel heavy today?");
+});
