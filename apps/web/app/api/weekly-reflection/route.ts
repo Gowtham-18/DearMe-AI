@@ -3,6 +3,7 @@ import { weeklyBodySchema, weeklyReflectionResponseSchema } from "@dearme/shared
 
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp } from "@/lib/nlp";
+import { isJournalLocked, unlockRequired } from "@/lib/journal-lock-server";
 
 export const maxDuration = 30;
 
@@ -16,6 +17,37 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing week range." }, { status: 400 });
   }
   const { weekStart, weekEnd, force } = parsed.data;
+
+  // A locked journal: the browser checks for a saved reflection itself, sends the decrypted week,
+  // and saves the result encrypted. Nothing is read or stored here.
+  const locked = (await isJournalLocked(supabase, user.id)) ? parsed.data.locked : null;
+  if (locked === undefined) return unlockRequired();
+  if (locked) {
+    if (locked.entries.length === 0) return NextResponse.json({ status: "ok", reflection: null });
+    if (await isRateLimited(supabase, "weekly", 20, 3600)) return tooManyRequests();
+    const lockedResult = await callNlp(
+      "/weekly-reflection",
+      {
+        user_id: user.id,
+        entries: locked.entries.map((entry) => ({
+          entry_id: entry.entry_id,
+          text: entry.text,
+          created_at: entry.created_at ?? "",
+          entry_date: entry.entry_date ?? null,
+          mood: entry.mood ?? null,
+          sentiment: entry.sentiment,
+          keyphrases: entry.keyphrases ?? [],
+        })),
+        themes: locked.themes,
+      },
+      15000,
+      weeklyReflectionResponseSchema
+    );
+    if (!lockedResult.ok) {
+      return NextResponse.json({ error: "Your weekly reflection isn't available right now." }, { status: 502 });
+    }
+    return NextResponse.json({ status: "ok", reflection: lockedResult.data, save_reflection: true });
+  }
 
   if (!force) {
     const { data: existing } = await supabase

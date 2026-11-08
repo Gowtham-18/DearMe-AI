@@ -4,7 +4,8 @@ import { chatTurnBodySchema, chatTurnV1ResponseSchema, embedResponseSchema } fro
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, EMBEDDING_DIM, serializeEmbedding } from "@/lib/nlp";
 import { CRISIS_MESSAGE, detectCrisis } from "@/lib/safety";
-import { loadMemories } from "@/lib/memory";
+import { loadMemories, memoryEnabled } from "@/lib/memory";
+import { isJournalLocked, mostSimilar, unlockRequired } from "@/lib/journal-lock-server";
 
 export const maxDuration = 60;
 
@@ -25,6 +26,11 @@ export async function POST(req: Request) {
   const { sessionId, latestUserMessage } = parsed.data;
 
   if (await isRateLimited(supabase, "chat", 40, 600)) return tooManyRequests();
+
+  // A locked journal is ciphertext in the database: use what the browser decrypted for this request.
+  const locked = (await isJournalLocked(supabase, user.id)) ? parsed.data.locked : null;
+  if (locked === undefined) return unlockRequired();
+  if (locked) return lockedTurn(ctx, parsed.data.sessionId, latestUserMessage, locked);
 
   // RLS guarantees these only return the signed-in user's rows.
   const [{ data: session }, { data: profile }, { data: turns }, { data: recentEntries }, memories] = await Promise.all([
@@ -148,5 +154,92 @@ export async function POST(req: Request) {
     safety: { crisis, reason: crisis ? "Detected crisis-related language." : null },
     enhanced_allowed: enhancedAllowed,
     warning: fallbackUsed ? "The reflection service is waking up, so a simple reply was used." : null,
+  });
+}
+
+type LockedChatContext = NonNullable<ReturnType<typeof chatTurnBodySchema.parse>["locked"]>;
+
+/** The same reply for a locked journal, from decrypted context. The browser saves the reply encrypted. */
+async function lockedTurn(
+  { supabase, user }: { supabase: import("@supabase/supabase-js").SupabaseClient; user: { id: string } },
+  sessionId: string,
+  latestUserMessage: string,
+  locked: LockedChatContext
+) {
+  const [{ data: session }, { data: profile }, remember] = await Promise.all([
+    supabase.from("journal_sessions").select("id, status, mood, time_budget, entry_date").eq("id", sessionId).maybeSingle(),
+    supabase.from("profiles").select("name, preferences").eq("user_id", user.id).maybeSingle(),
+    memoryEnabled(supabase, user.id),
+  ]);
+  if (!session) {
+    return NextResponse.json({ error: "This journal session wasn't found." }, { status: 404 });
+  }
+  if (session.status === "COMPLETED") {
+    return NextResponse.json({ error: "This session is already complete." }, { status: 409 });
+  }
+  const preferences = (profile?.preferences ?? {}) as { enhanced_language_enabled?: boolean; enhanced_consent?: boolean };
+  const enhancedAllowed = Boolean(preferences.enhanced_language_enabled && preferences.enhanced_consent);
+
+  let retrievedEntries: Array<{ entry_id: string; text: string; created_at?: string; mood?: string | null; similarity?: number }> = [];
+  const embedResult = await callNlp("/v1/embed", { text: latestUserMessage }, 6000, embedResponseSchema);
+  if (embedResult.ok && embedResult.data.embedding.length === EMBEDDING_DIM) {
+    retrievedEntries = mostSimilar(locked.entries, embedResult.data.embedding, 5).map(({ entry, similarity }) => ({
+      entry_id: entry.entry_id,
+      text: entry.text,
+      created_at: entry.created_at ?? undefined,
+      mood: entry.mood ?? null,
+      similarity,
+    }));
+  }
+
+  const chatResult = await callNlp(
+    "/v1/chat/turn",
+    {
+      user_id: user.id,
+      user_name: profile?.name ?? null,
+      chat_id: sessionId,
+      selected_prompt: locked.selectedPrompt,
+      user_message: latestUserMessage,
+      mood: session.mood ?? null,
+      time_budget_min: session.time_budget ?? 5,
+      history: locked.history,
+      recent_entries: locked.entries.slice(0, 5).map((entry) => ({
+        entry_id: entry.entry_id,
+        text: entry.text,
+        created_at: entry.created_at ?? undefined,
+        mood: entry.mood ?? null,
+      })),
+      retrieved_entries: retrievedEntries,
+      enhanced_language: enhancedAllowed,
+      today: session.entry_date ?? null,
+      memories: remember ? locked.memories : [],
+    },
+    enhancedAllowed ? 25000 : 15000,
+    chatTurnV1ResponseSchema
+  );
+
+  let message: string;
+  let evidence: Evidence[] = [];
+  let mode: "deterministic" | "enhanced" = "deterministic";
+  let crisis = false;
+  if (chatResult.ok) {
+    const data = chatResult.data;
+    message = [data.assistant_message, data.follow_up_question].filter(Boolean).join(" ").trim();
+    evidence = data.evidence;
+    mode = data.mode;
+    crisis = data.safety.crisis;
+  } else {
+    crisis = detectCrisis(latestUserMessage);
+    message = crisis ? CRISIS_MESSAGE : fallbackReply(profile?.name);
+  }
+  if (!message) message = fallbackReply(profile?.name);
+
+  return NextResponse.json({
+    assistant: { message, evidence, mode },
+    assistant_turn: null,
+    save_assistant_turn: true,
+    safety: { crisis, reason: crisis ? "Detected crisis-related language." : null },
+    enhanced_allowed: enhancedAllowed,
+    warning: chatResult.ok ? null : "The reflection service is waking up, so a simple reply was used.",
   });
 }

@@ -247,24 +247,112 @@ export const promptsV1ResponseSchema = z.object({
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
 
+/**
+ * Journal lock: the database holds only ciphertext, so the browser decrypts what a request needs and
+ * sends it along. The server uses it for this one request and never stores or logs it.
+ */
+const lockedEntrySchema = z.object({
+  entry_id: z.string().uuid(),
+  text: z.string().max(12000),
+  created_at: z.string().max(40).nullable().optional(),
+  entry_date: isoDate.nullable().optional(),
+  mood: z.string().max(40).nullable().optional(),
+  embedding: z.array(z.number()).max(384).optional(),
+  keyphrases: z.array(z.string().max(200)).max(40).optional(),
+});
+
+const lockedMemorySchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(["person", "event"]),
+  label: z.string().max(200),
+  detail: z.string().max(200).nullable(),
+  event_date: z.string().max(20).nullable(),
+  mention_count: z.number().int(),
+  last_seen: z.string().max(20).nullable(),
+  followed_up_on: z.string().max(20).nullable(),
+});
+
+export type LockedEntry = z.infer<typeof lockedEntrySchema>;
+export type LockedMemory = z.infer<typeof lockedMemorySchema>;
+
+export const lockedPromptsContextSchema = z.object({
+  /** Newest first. The first five are "recent"; similar entries are found among all of them. */
+  entries: z.array(lockedEntrySchema).max(60),
+  themes: z.array(z.string().max(200)).max(10),
+  memories: z.array(lockedMemorySchema).max(40),
+});
+
+export const lockedChatContextSchema = z.object({
+  selectedPrompt: z.string().max(1000),
+  history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) })).max(12),
+  entries: z.array(lockedEntrySchema).max(60),
+  memories: z.array(lockedMemorySchema).max(40),
+});
+
+export const lockedAnalyzeContextSchema = z.object({
+  text: z.string().min(1).max(100000),
+});
+
+export const lockedWeeklyContextSchema = z.object({
+  entries: z
+    .array(
+      lockedEntrySchema.extend({
+        sentiment: sentimentResultSchema.optional(),
+      })
+    )
+    .max(100),
+  themes: z
+    .array(
+      z.object({
+        label: z.string().max(200),
+        keywords: z.array(z.string().max(200)).max(40).optional(),
+        strength: z.number().optional(),
+        members: z
+          .array(z.object({ entry_id: z.string(), snippet: z.string().max(400), reason: z.string().max(200) }))
+          .max(5)
+          .optional(),
+      })
+    )
+    .max(10),
+});
+
 export const promptsBodySchema = z.object({
   mood: z.string().max(30).nullable().optional(),
   timeBudget: z.union([z.literal(3), z.literal(5), z.literal(7), z.literal(10)]).optional(),
   /** The person's local date, so follow-ups say "yesterday" by their calendar, not the server's. */
   today: isoDate.optional(),
+  locked: lockedPromptsContextSchema.optional(),
 });
 
 export const chatTurnBodySchema = z.object({
   sessionId: z.string().uuid(),
   latestUserMessage: z.string().trim().min(1).max(4000),
+  locked: lockedChatContextSchema.optional(),
 });
 
 export const analyzeBodySchema = z.object({
   entryId: z.string().uuid(),
+  locked: lockedAnalyzeContextSchema.optional(),
 });
 
 export const weeklyBodySchema = z.object({
   weekStart: isoDate,
   weekEnd: isoDate,
   force: z.boolean().optional(),
+  locked: lockedWeeklyContextSchema.optional(),
+});
+
+/** Journal lock: themes are recomputed from entries the browser decrypted. */
+export const themesBodySchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        entry_id: z.string().uuid(),
+        text: z.string().min(1).max(1000),
+        embedding: z.array(z.number()).length(384),
+        keyphrases: z.array(z.string().max(200)).max(40),
+      })
+    )
+    .min(1)
+    .max(150),
 });

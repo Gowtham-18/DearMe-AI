@@ -1,4 +1,4 @@
-// Runs the Supabase migrations (docs/db, phases 1..9) on PGlite with a Supabase-like auth stub and
+// Runs the Supabase migrations (docs/db, phases 1..10) on PGlite with a Supabase-like auth stub and
 // checks the auth rollout: legacy anon data -> anonymous sign-in -> claim -> Row Level Security.
 // Usage: npm install --prefix /tmp/pg @electric-sql/pglite@0.2.17 && node scripts/test-migrations.mjs . /tmp/pg
 import { readFileSync } from "node:fs";
@@ -307,6 +307,71 @@ ok(guestGone.n === 0, "guest sessions can still delete their account");
 await as("anon");
 const { rows: [names] } = await db.query(`select username_available('api') api, username_available('cara_ok') free`);
 ok(!names.api && names.free, "availability check uses the same reserved list");
+
+// Phase 10: journal lock (wrapped keys, encrypted values, encrypted embeddings)
+await db.exec(`reset role`);
+await db.exec(sql("schema-phase10-journal-lock.sql"));
+await db.exec(sql("schema-phase10-journal-lock.sql"));
+ok(true, "phase 10 applied (and is safe to re-run)");
+const E = "77777777-7777-4777-8777-777777777777";
+await db.query(`insert into auth.users (id) values ($1) on conflict do nothing`, [E]);
+const sealed = (n) => `enc:v1:${"A".repeat(n)}`;
+const keyRow = (uid) => [uid, 600000, "s".repeat(22), "w".repeat(80), "r".repeat(22), "v".repeat(80), sealed(60)];
+const insertKey = `insert into journal_keys (user_id, kdf_iterations, passphrase_salt, passphrase_wrapped, recovery_salt, recovery_wrapped, key_check)
+                   values ($1, $2, $3, $4, $5, $6, $7)`;
+
+await as("authenticated", E);
+await db.query(insertKey, keyRow(E));
+ok(await fails(insertKey, keyRow(C)), "a user can't store a journal key for someone else");
+await db.query(`insert into profiles (user_id, name, age) values ($1, 'Eli', 30) on conflict (user_id) do nothing`, [E]);
+const { rows: [eEntry] } = await db.query(
+  `insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, $2) returning id`, [E, sealed(300000)]);
+ok(Boolean(eEntry?.id), "encrypted entries may be longer than the plain-text limit");
+ok(await fails(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, $2)`, [E, sealed(600000)]),
+  "encrypted entries still have a size limit");
+ok(await fails(`insert into entries (user_id, entry_date, time_budget, content) values ($1, current_date, 5, repeat('x', 100001))`, [E]),
+  "plain-text entries keep the phase 9 limit");
+const { rows: [eSession] } = await db.query(
+  `insert into journal_sessions (user_id, entry_date, selected_prompt_id, selected_prompt_text) values ($1, current_date, 'p1', $2) returning id`, [E, sealed(3000)]);
+await db.query(`insert into journal_turns (session_id, user_id, role, content) values ($1, $2, 'user', $3)`, [eSession.id, E, sealed(30000)]);
+ok(true, "encrypted prompts and chat messages fit");
+await db.query(`insert into journal_embeddings (user_id, entry_id, embedding_enc) values ($1, $2, $3)`, [E, eEntry.id, sealed(5000)]);
+ok(await fails(`insert into journal_embeddings (user_id, entry_id) values ($1, $2)`, [E, eEntry.id]),
+  "an embedding row needs either a vector or an encrypted copy");
+ok(await fails(`insert into journal_embeddings (user_id, entry_id, embedding_enc) values ($1, $2, 'plain')`, [E, eEntry.id]),
+  "the encrypted embedding column only takes encrypted values");
+const { rows: eMatches } = await db.query(`select * from match_journal_entries($1, $2, 5)`, [E, vec(1)]);
+ok(eMatches.length === 0, "vector search skips encrypted embeddings");
+
+const longLabel = sealed(400);
+await db.query(`select remember_facts($1, $2::jsonb)`, [eEntry.id, JSON.stringify([
+  { kind: "person", key: "h:" + "ab".repeat(24), label: longLabel, detail: sealed(300) }])]);
+const { rows: [eFact] } = await db.query(`select fact_key, label, detail from memory_facts where user_id = $1`, [E]);
+ok(eFact?.label === longLabel && eFact?.detail === sealed(300), "remember_facts keeps encrypted labels whole");
+const { rows: [eTheme] } = await db.query(`select replace_user_themes($1::jsonb) n`, [JSON.stringify([
+  { label: sealed(500), keywords: sealed(400), strength: 0.5, members: [{ entry_id: eEntry.id, score: 0.7 }] }])]);
+const { rows: [eThemeRow] } = await db.query(`select label, keywords from themes where user_id = $1`, [E]);
+ok(eTheme.n === 1 && eThemeRow.label === sealed(500) && eThemeRow.keywords === sealed(400), "replace_user_themes keeps encrypted themes whole");
+await db.query(`select remember_facts($1, $2::jsonb)`, [null, JSON.stringify([{ kind: "person", key: "person:zoe", label: "x".repeat(200) }])]);
+const { rows: [plainFact] } = await db.query(`select char_length(label) n from memory_facts where fact_key = 'person:zoe'`);
+ok(plainFact.n === 80, "plain labels are still trimmed to 80 characters");
+
+await as("authenticated", C);
+const { rows: peek } = await db.query(`select * from journal_keys`);
+ok(peek.length === 0, "other users can't see someone's wrapped key");
+await as("anon");
+let anonKeys = false;
+try { anonKeys = (await db.query(`select * from journal_keys`)).rows.length === 0; } catch { anonKeys = true; }
+ok(anonKeys, "signed-out role can't read wrapped keys");
+
+await as("authenticated", E);
+await db.query(`select delete_my_data(false)`);
+const { rows: [keptKey] } = await db.query(`select count(*)::int n from journal_keys`);
+ok(keptKey.n === 1, "deleting journal data but keeping the profile keeps journal lock");
+await db.query(`select delete_my_account()`);
+await db.exec(`reset role`);
+const { rows: [keyGone] } = await db.query(`select count(*)::int n from journal_keys where user_id = $1`, [E]);
+ok(keyGone.n === 0, "deleting the account deletes the wrapped key");
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures ? 1 : 0);

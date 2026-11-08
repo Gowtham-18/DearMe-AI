@@ -1,5 +1,12 @@
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { DbListResult, DbResult } from "@/lib/db/types";
+import { openJson, openText } from "@/lib/crypto/vault";
+
+const openTheme = async (row: ThemeRecord): Promise<ThemeRecord> => ({
+  ...row,
+  label: await openText(row.label),
+  keywords: await openJson<string[]>(row.keywords, []),
+});
 
 export interface ThemeRecord {
   id: string;
@@ -37,7 +44,7 @@ export async function listThemes(
       return { data: [], error: error.message };
     }
 
-    return { data: data ?? [], error: null };
+    return { data: await Promise.all(((data ?? []) as ThemeRecord[]).map(openTheme)), error: null };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load themes.";
     return { data: [], error: message };

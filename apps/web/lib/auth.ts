@@ -1,6 +1,7 @@
 import type { User } from "@supabase/supabase-js";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { forgetVaultOnDevice, vault } from "@/lib/crypto/vault";
 
 // Before Phase 6 the app identified people by a random id in localStorage.
 const LEGACY_ID_KEY = "dearme-user-id";
@@ -58,6 +59,8 @@ export async function continueWithGoogle(
 /** Sign out and forget this device's cached profile. scope "global" ends every session. */
 export async function signOut(scope: "local" | "global" = "local") {
   const supabase = getSupabaseBrowserClient();
+  // Journal lock: this device forgets the key, so the next sign-in asks for the passphrase.
+  await forgetVaultOnDevice();
   await supabase.auth.signOut({ scope });
   try {
     window.localStorage.removeItem("dearme-profile");
@@ -118,8 +121,19 @@ export async function claimLegacyData(userId: string): Promise<number> {
   return moved;
 }
 
-/** POST to one of our API routes as the signed-in user. */
+/**
+ * POST to one of our API routes as the signed-in user. With journal lock on, routes that need journal
+ * text go through the locked client, which sends decrypted context and saves results encrypted.
+ */
 export async function apiFetch(path: string, body: unknown): Promise<Response> {
+  if (vault.active()) {
+    const { lockedApiFetch } = await import("@/lib/crypto/locked-api");
+    return lockedApiFetch(path, body);
+  }
+  return postApi(path, body);
+}
+
+export async function postApi(path: string, body: unknown): Promise<Response> {
   const supabase = getSupabaseBrowserClient();
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;

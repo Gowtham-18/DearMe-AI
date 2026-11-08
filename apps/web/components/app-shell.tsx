@@ -12,6 +12,10 @@ import { useProfileStore } from "@/store/use-profile-store";
 import { getProfile, upsertProfile } from "@/lib/db/profiles";
 import { claimLegacyData, getSignedInUser, hasSeenWelcome, isGuest } from "@/lib/auth";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import UnlockScreen from "@/components/journal-lock/unlock-screen";
+import { initVault } from "@/lib/crypto/vault";
+import { useVaultStatus } from "@/lib/crypto/use-vault";
+import { encryptExistingData, migrationPending } from "@/lib/crypto/migrate";
 
 type AuthState = "pending" | "ready" | "error";
 
@@ -21,6 +25,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { userId, setUserId } = useSessionStore();
   const { profile, status, error, setStatus, setProfile, setError } = useProfileStore();
   const [authState, setAuthState] = useState<AuthState>("pending");
+  const vaultStatus = useVaultStatus();
+  const [vaultError, setVaultError] = useState(false);
 
   // 1) Require an account. No session: the welcome slides (first visit) or log in. A guest journal
   //    from before accounts goes to sign-up, which attaches the new login to it so nothing is lost.
@@ -64,6 +70,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       listener.subscription.unsubscribe();
     };
   }, [router, setUserId]);
+
+  // Journal lock: find out whether this account uses it and whether this device holds the key.
+  // Nothing renders until that's known, so locked text is never written as plain text.
+  useEffect(() => {
+    if (!userId || authState !== "ready") return;
+    let alive = true;
+    setVaultError(false);
+    initVault(userId).catch(() => alive && setVaultError(true));
+    return () => {
+      alive = false;
+    };
+  }, [userId, authState]);
+
+  // An encryption run that was interrupted (tab closed) carries on quietly once unlocked.
+  useEffect(() => {
+    if (vaultStatus !== "unlocked" || !userId || migrationPending(userId) !== "seal") return;
+    encryptExistingData(userId).catch(() => undefined);
+  }, [vaultStatus, userId]);
 
   // 2) Load the profile for the signed-in user.
   useEffect(() => {
@@ -121,15 +145,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [userId]);
 
   let content: React.ReactNode;
-  if (authState === "error") {
+  if (authState === "error" || vaultError) {
     content = (
       <div className="rounded-2xl border bg-card p-6 text-sm">
         <p className="font-medium text-foreground">We couldn&apos;t start your private session.</p>
         <p className="mt-1 text-muted-foreground">Check your connection and refresh the page.</p>
       </div>
     );
-  } else if (authState === "pending" || status === "loading" || status === "idle") {
+  } else if (authState === "pending" || status === "loading" || status === "idle" || vaultStatus === "unknown") {
     content = <AppLoading />;
+  } else if (vaultStatus === "locked") {
+    content = <UnlockScreen />;
   } else {
     content = children;
   }
@@ -153,7 +179,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </main>
         </div>
       </div>
-      {authState === "ready" && <OnboardingModal />}
+      {authState === "ready" && (vaultStatus === "off" || vaultStatus === "unlocked") && <OnboardingModal />}
     </div>
   );
 }

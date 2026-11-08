@@ -4,7 +4,8 @@ import { promptsBodySchema, promptsV1ResponseSchema } from "@dearme/shared";
 import { getRequestContext, isRateLimited, tooManyRequests } from "@/lib/supabase/server";
 import { callNlp, serializeEmbedding } from "@/lib/nlp";
 import { buildFallbackPrompts } from "@/lib/prompts";
-import { loadMemories } from "@/lib/memory";
+import { loadMemories, memoryEnabled } from "@/lib/memory";
+import { isJournalLocked, mostSimilar } from "@/lib/journal-lock-server";
 
 export const maxDuration = 30;
 
@@ -21,6 +22,48 @@ export async function POST(req: Request) {
     NextResponse.json({ prompts: buildFallbackPrompts(mood, timeBudget), safety: { crisis: false, reason: null } });
 
   if (await isRateLimited(supabase, "prompts", 60, 600)) return fallback();
+
+  // A locked journal is ciphertext in the database: personalise from what the browser decrypted,
+  // or fall back to general prompts when nothing was sent.
+  if (await isJournalLocked(supabase, user.id)) {
+    const locked = parsed.success ? parsed.data.locked : undefined;
+    if (!locked) return fallback();
+    const latest = locked.entries.find((entry) => entry.embedding?.length);
+    const similar = latest?.embedding ? mostSimilar(locked.entries, latest.embedding, 5) : [];
+    const lockedResult = await callNlp(
+      "/v1/prompts",
+      {
+        user_id: user.id,
+        mood,
+        time_budget_min: timeBudget,
+        today,
+        recent_entries: locked.entries.slice(0, 5).map((entry) => ({
+          entry_id: entry.entry_id,
+          text: entry.text,
+          created_at: entry.created_at ?? undefined,
+          entry_date: entry.entry_date ?? undefined,
+          mood: entry.mood ?? null,
+          source: "recent",
+        })),
+        similar_entries: similar.map(({ entry, similarity }) => ({
+          entry_id: entry.entry_id,
+          text: entry.text,
+          created_at: entry.created_at ?? undefined,
+          mood: entry.mood ?? null,
+          source: "similar",
+          similarity,
+        })),
+        themes: locked.themes,
+        memories: (await memoryEnabled(supabase, user.id)) ? locked.memories : [],
+      },
+      10000,
+      promptsV1ResponseSchema
+    );
+    if (!lockedResult.ok) return fallback();
+    if (lockedResult.data.safety.crisis) return NextResponse.json(lockedResult.data);
+    if (lockedResult.data.prompts.length === 0) return fallback();
+    return NextResponse.json(lockedResult.data);
+  }
 
   const [{ data: recentEntries }, { data: lastEmbedding }, { data: themes }, memories] = await Promise.all([
     supabase
