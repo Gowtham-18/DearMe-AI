@@ -23,7 +23,7 @@ const SLIDES: Slide[] = [
   { title: "Write a little. It listens.", body: "One thoughtful question at a time.", Scene: ListenScene },
   { title: "Every entry becomes a page", body: "Your answers, written out as one journal entry.", Scene: PageScene },
   { title: "See what keeps coming up", body: "Moods, themes and a note on your week.", Scene: PatternsScene },
-  { title: "Yours alone", body: "Only you can read it. Export or delete it anytime.", Scene: PrivateScene },
+  { title: "Yours alone", body: "Private to you, with an optional passphrase lock. Export or delete it anytime.", Scene: PrivateScene },
 ];
 
 export default function WelcomePage() {
