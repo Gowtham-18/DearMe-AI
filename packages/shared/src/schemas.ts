@@ -324,9 +324,14 @@ export const promptsBodySchema = z.object({
   locked: lockedPromptsContextSchema.optional(),
 });
 
+/** Where the session is against its chosen time: explore, closing (ask about tomorrow), finish, after. */
+export const sessionPhaseSchema = z.enum(["explore", "closing", "finish", "after"]);
+export type SessionPhase = z.infer<typeof sessionPhaseSchema>;
+
 export const chatTurnBodySchema = z.object({
   sessionId: z.string().uuid(),
   latestUserMessage: z.string().trim().min(1).max(4000),
+  phase: sessionPhaseSchema.optional(),
   locked: lockedChatContextSchema.optional(),
 });
 

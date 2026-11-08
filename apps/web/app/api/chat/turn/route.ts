@@ -11,8 +11,13 @@ export const maxDuration = 60;
 
 type Evidence = { entry_id?: string | null; snippet: string; reason: string };
 
-const fallbackReply = (name?: string | null) =>
-  `${name ? `${name}, t` : "T"}hanks for sharing that. What feels most important to explore next?`;
+const fallbackReply = (name?: string | null, phase?: string) => {
+  // The NLP service is asleep: still close the session the same way.
+  if (phase === "closing") return "Thank you for sharing that. Before you close the page, what's one small thing that would make tomorrow a good day?";
+  if (phase === "finish") return "Thank you for writing today. Your page is ready, with a note to yourself and one small thing for tomorrow. Tap Complete journal to see it.";
+  if (phase === "after") return "Added to your page. Tap Complete journal whenever you're ready.";
+  return `${name ? `${name}, t` : "T"}hanks for sharing that. What feels most important to explore next?`;
+};
 
 export async function POST(req: Request) {
   const ctx = await getRequestContext(req);
@@ -23,14 +28,14 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Your message couldn't be sent. Please try again." }, { status: 400 });
   }
-  const { sessionId, latestUserMessage } = parsed.data;
+  const { sessionId, latestUserMessage, phase } = parsed.data;
 
   if (await isRateLimited(supabase, "chat", 40, 600)) return tooManyRequests();
 
   // A locked journal is ciphertext in the database: use what the browser decrypted for this request.
   const locked = (await isJournalLocked(supabase, user.id)) ? parsed.data.locked : null;
   if (locked === undefined) return unlockRequired();
-  if (locked) return lockedTurn(ctx, parsed.data.sessionId, latestUserMessage, locked);
+  if (locked) return lockedTurn(ctx, parsed.data.sessionId, latestUserMessage, locked, phase);
 
   // RLS guarantees these only return the signed-in user's rows.
   const [{ data: session }, { data: profile }, { data: turns }, { data: recentEntries }, memories] = await Promise.all([
@@ -118,6 +123,7 @@ export async function POST(req: Request) {
       enhanced_language: enhancedAllowed,
       today: session.entry_date ?? null,
       memories,
+      phase: phase ?? null,
     },
     enhancedAllowed ? 25000 : 15000,
     chatTurnV1ResponseSchema
@@ -138,9 +144,9 @@ export async function POST(req: Request) {
   } else {
     // The NLP service is down or asleep: still recognise crisis language locally.
     crisis = detectCrisis(latestUserMessage);
-    message = crisis ? CRISIS_MESSAGE : fallbackReply(profile?.name);
+    message = crisis ? CRISIS_MESSAGE : fallbackReply(profile?.name, phase);
   }
-  if (!message) message = fallbackReply(profile?.name);
+  if (!message) message = fallbackReply(profile?.name, phase);
 
   const { data: assistantTurn } = await supabase
     .from("journal_turns")
@@ -164,7 +170,8 @@ async function lockedTurn(
   { supabase, user }: { supabase: import("@supabase/supabase-js").SupabaseClient; user: { id: string } },
   sessionId: string,
   latestUserMessage: string,
-  locked: LockedChatContext
+  locked: LockedChatContext,
+  phase?: string
 ) {
   const [{ data: session }, { data: profile }, remember] = await Promise.all([
     supabase.from("journal_sessions").select("id, status, mood, time_budget, entry_date").eq("id", sessionId).maybeSingle(),
@@ -213,6 +220,7 @@ async function lockedTurn(
       enhanced_language: enhancedAllowed,
       today: session.entry_date ?? null,
       memories: remember ? locked.memories : [],
+      phase: phase ?? null,
     },
     enhancedAllowed ? 25000 : 15000,
     chatTurnV1ResponseSchema
@@ -230,9 +238,9 @@ async function lockedTurn(
     crisis = data.safety.crisis;
   } else {
     crisis = detectCrisis(latestUserMessage);
-    message = crisis ? CRISIS_MESSAGE : fallbackReply(profile?.name);
+    message = crisis ? CRISIS_MESSAGE : fallbackReply(profile?.name, phase);
   }
-  if (!message) message = fallbackReply(profile?.name);
+  if (!message) message = fallbackReply(profile?.name, phase);
 
   return NextResponse.json({
     assistant: { message, evidence, mode },

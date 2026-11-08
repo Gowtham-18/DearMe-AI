@@ -11,8 +11,23 @@
  *   "Did that help? Not really."
  */
 
+import { affirmationFor, closingCore, closingSentence, isClosingQuestion, suggestedTodo, todoFrom } from "./journal-closing";
+
 export type StoryTurn = { role: string; content: string };
-export type StoryPassage = { question: string | null; text: string };
+/** `text` is the written-out prose (never contains a question); `answer` is your own words, tidied. */
+export type StoryPassage = { question: string | null; text: string; answer: string };
+export type JournalClosing = {
+  /** The closing answer as a sentence ("To make tomorrow a little lighter, I'll go to bed early."), if there was one. */
+  sentence: string | null;
+  /** The closing question, in the first person, and the answer as written, for the "show the questions" view. */
+  question: string | null;
+  answer: string | null;
+  /** One small thing for tomorrow: from the closing answer, or suggested from the entry. */
+  todo: string;
+  todoSuggested: boolean;
+  /** A first-person affirmation that fits what was written. */
+  affirmation: string;
+};
 export type JournalStory = {
   /** The opening prompt, in the first person ("What's on my mind today?"). */
   opening: string | null;
@@ -20,6 +35,7 @@ export type JournalStory = {
   openingJoined: boolean;
   passages: StoryPassage[];
   paragraphs: string[];
+  closing: JournalClosing | null;
 };
 
 const CONTRACTIONS: Record<string, string> = {
@@ -126,6 +142,8 @@ export function tidy(text: string): string {
     .join(" ");
 }
 
+const SUBJECT_STARTS = new Set("it he she they we everything nothing".split(" "));
+
 export function isFragment(text: string): boolean {
   const words = normalizeSpace(text)
     .toLowerCase()
@@ -134,6 +152,7 @@ export function isFragment(text: string): boolean {
     .filter(Boolean);
   if (words.length === 0 || words.length > 12) return false;
   if (soundsPast(words.join(" ")) && words.length > 2) return false; // "she learned to sit"
+  if (words.length >= 3 && SUBJECT_STARTS.has(words[0])) return false; // "it affects everything"
   return !words.some((word) => CLAUSE_WORDS.has(word) || CLAUSE_WORDS.has(word.replace(/'.*$/, "")));
 }
 
@@ -280,13 +299,21 @@ const GRAMMAR_FIXES: Array<[RegExp, string]> = [
   [/\b(in|at|after|before|during)\s+(interview|meeting|exam|presentation|party)\b/gi, "$1 the $2"],
 ];
 
+const DROPPED_SUBJECT_RE =
+  /^((?:just|really|kinda|so|also|still)\s+)?(felt|feel|feeling|had|got|went|tried|woke|slept|need|needed|want|wanted|think|thought|love|loved|hate|hated|miss|missed|was feeling|have been|been feeling|keep|kept)\b/i;
+
 function polish(text: string): string {
-  return GRAMMAR_FIXES.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement), text);
+  const fixed = GRAMMAR_FIXES.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement), text);
+  // "Just felt tired in general." -> "I just felt tired in general."
+  return fixed
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => (DROPPED_SUBJECT_RE.test(sentence) ? `I ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence))
+    .join(" ");
 }
 
 const PAST_HINT = /\b(went|made|happened|was|were|did|got|felt|took|came|today|yesterday|this morning|tonight)\b/i;
 const PART_RE =
-  /^what part(?: of ([\w' ]+?))? ((?:wore|hurt|hurts|made|makes|felt|feels|was|is|has|stressed|bothered|worried|annoyed|upset|scared|drained|stayed|stays|stuck|weighs|weighed)\b.*)$/i;
+  /^what part(?: of ([\w' ]+?))? ((?:wore|hurt|hurts|made|makes|felt|feels|was|is|has|stressed|bothered|bothers|worried|worries|annoyed|annoys|upset|upsets|scared|scares|frustrates|frustrated|drained|drains|stayed|stays|stuck|weighs|weighed|matters|mattered|helps|helped|excites|excited)\b.*)$/i;
 
 /** "What part of work wore me out the most" -> lead "The part of work that wore me out the most", aux "was". */
 function partQuestion(q: string): { lead: string; aux: string } | null {
@@ -340,43 +367,164 @@ export function clauseStatementFor(question: string, answer: string, names: Set<
     return finish(`${lead} is ${link}${clause}`);
   }
   const part = partQuestion(q);
-  if (part) return finish(`${part.lead} ${part.aux} that ${clause}`);
+  if (part) return finish(`${part.lead} ${part.aux} ${linkThat(clause)}${clause}`);
   // "What drained you today?" -> "What drained me today was that ..."
   if ((m = q.match(/^what (drained|helped|surprised|hurt|annoyed|upset|worried|stressed|scared|bothered|gave) me(.*)$/i))) {
-    return finish(`What ${m[1].toLowerCase()} me${m[2]} was that ${clause}`);
+    return finish(`What ${m[1].toLowerCase()} me${m[2]} was ${linkThat(clause)}${clause}`);
   }
   return null;
 }
 
-/** The written passage for one answer, and whether the question was woven into it. */
-function passageFor(question: string | null, answer: string, names: Set<string>): { text: string; joined: boolean } {
-  const yesNo = YES_NO_RE.test(answer.trim());
-  if (question && (yesNo || isFragment(answer))) {
-    const statement = yesNo ? null : statementFor(question, answer, names);
-    if (statement) return { text: polish(statement), joined: true };
-    // Keep it as a question asked of yourself.
-    return {
-      text: `${capitalize(toFirstPerson(question).replace(/\?*$/, "?"))} ${capitalize(answerForSentence(answer, names))}.`,
-      joined: true,
-    };
+/** "that" joins a clause ("... is that I lost focus"), but not one that already links ("... is when I ..."). */
+function linkThat(clause: string): string {
+  return /^(that|when|if|how|whether|because|being|having|not|knowing|seeing|feeling|the fact)\b/i.test(clause) ? "" : "that ";
+}
+
+const AUX_NEGATIVE: Record<string, string> = {
+  do: "don't", does: "doesn't", did: "didn't", is: "isn't", are: "aren't", was: "wasn't", were: "weren't",
+  have: "haven't", has: "hasn't", had: "hadn't", can: "can't", could: "couldn't", would: "wouldn't",
+  will: "won't", should: "shouldn't", am: "am not",
+};
+const BASE_VERBS = new Set(
+  "help work matter change make feel go come hurt bother affect improve calm last stay get".split(" ")
+);
+const YES_RE = /^(yes|yeah|yep|yup|definitely|absolutely|sure|of course)\b/i;
+const NO_RE = /^(no|nope|nah|not really|not at all)\b/i;
+const HEDGES: Array<[RegExp, (s: string) => string]> = [
+  [/^(maybe|perhaps)\b/i, (s) => `Maybe ${lowerFirst(s)}`],
+  [/^probably\b/i, (s) => `Probably ${lowerFirst(s)}`],
+  [/^i guess\b/i, (s) => `I guess ${lowerFirst(s)}`],
+  [/^(kind of|kinda|sort of)\b/i, (s) => `${s.replace(/[.]$/, "")}, kind of.`],
+  [/^(a little|a bit)\b/i, (s) => `${s.replace(/[.]$/, "")}, a little.`],
+];
+const lowerFirst = (text: string) => (/^I\b|^I'/.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1));
+
+/** "Did that help?" + "not really" -> "That didn't really help." Null when the question won't flip. */
+export function yesNoStatement(question: string, answer: string): string | null {
+  const q = toFirstPerson(question).replace(/^(and|so|okay|ok),?\s+/i, "").replace(/\?+$/, "").trim();
+  const m = q.match(/^(do|does|did|is|are|am|was|were|have|has|had|can|could|would|will|should)\s+(.+)$/i);
+  if (!m) return null;
+  const aux = m[1].toLowerCase();
+  const words = m[2].split(/\s+/);
+  let split = 0;
+  if (/^(I|it|that|this|they|he|she|we|there|you)$/i.test(words[0])) split = 1;
+  else if (/^(my|the|your|his|her|their|our)$/i.test(words[0]) && words.length > 2) split = 2;
+  else {
+    const verb = words.findIndex((word, index) => index > 0 && BASE_VERBS.has(word.toLowerCase()));
+    if (verb > 0) split = verb;
+  }
+  if (split === 0 || split >= words.length) return null;
+  const subject = words.slice(0, split).join(" ");
+  const rest = words.slice(split).join(" ");
+  const a = answer.trim().toLowerCase();
+  const negative = NO_RE.test(a);
+  if (!negative && !YES_RE.test(a) && !HEDGES.some(([re]) => re.test(a))) return null;
+  const subj = subject === "I" ? "I" : capitalize(subject.toLowerCase() === "it" ? "it" : subject);
+  let sentence: string;
+  if (negative) {
+    const neg = aux === "am" && subject === "I" ? "I'm not" : `${subj} ${AUX_NEGATIVE[aux]}`;
+    const really = /^not really/.test(a) ? " really" : "";
+    sentence = `${neg}${really} ${rest}.`;
+  } else {
+    sentence = aux === "am" && subject === "I" ? `I'm ${rest}.` : `${subj} ${aux} ${rest}.`;
+    const hedge = HEDGES.find(([re]) => re.test(a));
+    if (hedge) sentence = hedge[1](sentence);
+  }
+  return capitalize(sentence.replace(/\s+/g, " "));
+}
+
+/** "What has been draining my energy?" -> "what has been draining my energy"; "Where do I feel it?" -> "where I feel it". */
+export function embeddedQuestion(question: string): string | null {
+  const q = toFirstPerson(question).replace(/^(and|so|okay|ok),?\s+/i, "").replace(/\?+$/, "").trim();
+  const wh = q.match(/^(what|why|how|who|where|when|which)\b\s*(.*)$/i);
+  if (!wh) return null;
+  const word = wh[1].toLowerCase();
+  const rest = wh[2];
+  const inverted = rest.match(/^(do|am|is|are|was|were|have|has|had|can|could|would|will|should)\s+(I|it|this|that|they|he|she|we|my \S+|the \S+)\s+(.*)$/i);
+  if (inverted) {
+    const aux = inverted[1].toLowerCase();
+    const subject = inverted[2];
+    const tail = inverted[3];
+    if (aux === "do") return `${word} ${subject} ${tail}`.trim();
+    return `${word} ${subject} ${aux} ${tail}`.trim();
+  }
+  if (/^(does|did)\b/i.test(rest)) return null; // needs a verb form change
+  return `${word} ${rest}`.trim();
+}
+
+const UNSURE_RE = /^((?:i(?:'m| am)?\s+)?(?:really\s+|honestly\s+|just\s+)?(?:not\s+(?:really\s+)?sure|don't\s+(?:really\s+)?know|do not know|have no idea|no idea))\b[,.;:]?\s*/i;
+const LEADING_YES_NO_RE = /^(yes|yeah|yep|yup|no|nope|nah)\b[,.!]?\s+(?=\S)/i;
+const EVERYTHING_RE = /\b(everything|all of (?:it|them|those)|all three|both)\b/i;
+
+/** "affects everything" + "— my energy, my plans, or my mood" -> "affects everything: my energy, my plans and my mood". */
+function expandEverything(question: string, text: string): string {
+  const list = toFirstPerson(question).replace(/\?+$/, "").split(/\s+[—–-]\s+|:\s+/)[1];
+  if (!list || !/,|\bor\b/.test(list) || !EVERYTHING_RE.test(text)) return text;
+  const items = list.replace(/,?\s+or\s+/i, " and ").replace(/,\s+and\s+/, " and ");
+  return text.replace(EVERYTHING_RE, (match) => `${match}: ${items}`);
+}
+
+/** "I'm really not sure, my body is tired." + question -> "I'm really not sure what has been draining my energy. My body is tired." */
+function unsureStatement(question: string, answer: string): string | null {
+  const m = normalizeSpace(answer).match(UNSURE_RE);
+  const embedded = embeddedQuestion(question);
+  if (!m || !embedded) return null;
+  const lead = fixWords(m[1].replace(/^(?!i\b)/i, "I'm ")).replace(/^I'm (I|I'm|I am)\b/i, "$1");
+  const rest = normalizeSpace(answer).slice(m[0].length);
+  const first = `${capitalize(lead)} ${embedded}.`;
+  return rest ? `${first} ${tidy(polish(rest))}` : first;
+}
+
+/** The written passage for one answer: prose without the question, and whether the question was woven in. */
+function passageFor(question: string | null, rawAnswer: string, names: Set<string>): { text: string | null; joined: boolean } {
+  let answer = normalizeSpace(rawAnswer);
+  const yesNo = YES_NO_RE.test(answer);
+  if (question && yesNo) {
+    // A bare "yes"/"not really" only means something next to its question.
+    const statement = yesNoStatement(question, answer);
+    return statement ? { text: polish(statement), joined: true } : { text: null, joined: true };
+  }
+  // "Yes, it affects everything." -> "it affects everything" (the question is carried by the sentence).
+  if (question && LEADING_YES_NO_RE.test(answer) && wordCount(answer.replace(LEADING_YES_NO_RE, "")) >= 2) {
+    answer = capitalize(answer.replace(LEADING_YES_NO_RE, ""));
+  }
+  if (question) {
+    const unsure = unsureStatement(question, answer);
+    if (unsure) return { text: unsure, joined: true };
+  }
+  if (question && isFragment(answer)) {
+    const statement = statementFor(question, answer, names);
+    if (statement) return { text: expandEverything(question, polish(statement)), joined: true };
+    // No statement form: a note in journal style ("Where I feel it in my body: my shoulders.").
+    const embedded = embeddedQuestion(question);
+    const note = answerForSentence(answer, names);
+    return { text: embedded ? `${capitalize(embedded)}: ${note}.` : `${capitalize(note)}.`, joined: Boolean(embedded) };
   }
   if (question) {
     const joined = clauseStatementFor(question, answer, names);
-    if (joined) return { text: joined, joined: true };
+    if (joined) return { text: expandEverything(question, joined), joined: true };
+    return { text: expandEverything(question, tidy(polish(answer))), joined: false };
   }
   return { text: tidy(polish(answer)), joined: false };
 }
 
 /** Build the journal piece for one entry. */
-export function composeJournal(prompt: string | null | undefined, turns: StoryTurn[], fallbackText = ""): JournalStory {
+export function composeJournal(
+  prompt: string | null | undefined,
+  turns: StoryTurn[],
+  fallbackText = "",
+  mood: string | null = null
+): JournalStory {
   const opening = prompt?.trim() ? toFirstPerson(prompt.trim()) : null;
   const userTurns = turns.filter((turn) => turn.role === "user" && turn.content.trim());
   const passages: StoryPassage[] = [];
   let openingJoined = false;
+  let closingQuestion: string | null = null;
+  let closingAnswer: string | null = null;
 
   if (userTurns.length === 0) {
     for (const block of fallbackText.split(/\n\s*\n/)) {
-      if (block.trim()) passages.push({ question: null, text: tidy(block) });
+      if (block.trim()) passages.push({ question: null, text: tidy(block), answer: tidy(block) });
     }
   } else {
     const names = namesIn(userTurns.map((t) => t.content));
@@ -388,13 +536,20 @@ export function composeJournal(prompt: string | null | undefined, turns: StoryTu
         question = lastQuestion(content);
         continue;
       }
-      if (ACK_RE.test(content)) {
+      if (ACK_RE.test(content) && !isClosingQuestion(question)) {
+        question = null;
+        continue;
+      }
+      // The forward-looking last answer becomes the page's closing, not part of the story.
+      if (isClosingQuestion(question) && closingAnswer === null) {
+        closingQuestion = question;
+        closingAnswer = content;
         question = null;
         continue;
       }
       const passage = passageFor(question, content, names);
       if (passages.length === 0 && question && question === (prompt?.trim() || null)) openingJoined = passage.joined;
-      passages.push({ question, text: passage.text });
+      if (passage.text) passages.push({ question, text: passage.text, answer: tidy(polish(content)) });
       question = null;
     }
   }
@@ -409,5 +564,22 @@ export function composeJournal(prompt: string | null | undefined, turns: StoryTu
       paragraphs.push(passage.text);
     }
   }
-  return { opening, openingJoined, passages, paragraphs };
+
+  const written = userTurns.length ? userTurns.map((turn) => turn.content).join(" ") : fallbackText;
+  let closing: JournalClosing | null = null;
+  if (written.trim()) {
+    const firstPersonClosing = closingQuestion ? toFirstPerson(closingCore(closingQuestion)) : null;
+    const todo = closingAnswer ? todoFrom(closingAnswer) : null;
+    // The affirmation reads the story, not the plan for tomorrow.
+    const story = userTurns.filter((turn) => turn.content !== closingAnswer).map((turn) => turn.content).join(" ") || written;
+    closing = {
+      sentence: firstPersonClosing && closingAnswer ? closingSentence(firstPersonClosing, closingAnswer, todo) : null,
+      question: firstPersonClosing,
+      answer: closingAnswer ? tidy(polish(closingAnswer)) : null,
+      todo: todo ?? suggestedTodo(story, mood),
+      todoSuggested: !todo,
+      affirmation: affirmationFor(story, mood),
+    };
+  }
+  return { opening, openingJoined, passages, paragraphs, closing };
 }

@@ -676,7 +676,7 @@ def build_prompts(
     return prompts[:4]
 
 
-def build_reflection_plan(
+def _reflection_plan(
     user_id: str,
     selected_prompt: str,
     latest_user_message: str,
@@ -689,6 +689,7 @@ def build_reflection_plan(
     allow_llm: bool = False,
     memories: Sequence[MemoryFact] = (),
     today: Optional[str] = None,
+    phase: Optional[str] = None,
 ) -> ReflectionPlan:
     history = history or []
 
@@ -945,7 +946,7 @@ def build_reflection_plan(
 
     # 4) One specific question that moves the conversation a step deeper.
     options: List[str] = []
-    if wrap_up_due(prior_user, time_budget):
+    if phase is None and wrap_up_due(prior_user, time_budget):
         options.append(WRAP_UP_QUESTION)
     if advice:
         options.extend(ADVICE_QUESTIONS)
@@ -1036,3 +1037,92 @@ def render_plan_to_message(plan: ReflectionPlan) -> RenderedMessage:
         gentle_nudge=plan.gentle_nudge.text,
         follow_up_question=plan.follow_up_question.text,
     )
+
+
+# --- Closing a session ---------------------------------------------------------------------------
+# The browser counts answers against the chosen time (3 min: 3 answers, 5: 4, 7: 5, 10: 6) and
+# sends a phase: "closing" asks one forward-looking question, "finish" thanks them and points to the
+# finished page, "after" acknowledges anything added later. Safety always comes first.
+
+PHASES = {"explore", "closing", "finish", "after"}
+_TIRED_RE = re.compile(r"\b(tired|exhausted|drained|draining|no energy|low energy|my energy|sleepy|fatigue|worn out|burn(?:ed|t)? ?out)\b")
+_NOTHING_RE = re.compile(r"^(nothing|idk|i don'?t know|not sure|no idea|dunno|nah|no|none|nothing really|i'?m not sure)[.! ]*$")
+
+# Each one contains "make tomorrow ... better/lighter/easier/a good day": the journal page looks for that.
+CLOSING_QUESTIONS = {
+    "tired": "Before you close the page, what's one small thing that could make tomorrow a little easier on your energy?",
+    "negative": "Before you close the page, what's one small thing that could make tomorrow a little lighter?",
+    "positive": "Before you close the page, what would make tomorrow even better?",
+    "neutral": "Before you close the page, what's one small thing that would make tomorrow a good day?",
+}
+
+
+def closing_question(user_messages: Sequence[str], mood: Optional[str] = None) -> str:
+    """The last question, matched to how the session went: lighter after a heavy day, better after a good one."""
+    text = " ".join(user_messages)
+    lowered = _norm(text)
+    if _TIRED_RE.search(lowered) or (mood or "").lower() == "tired":
+        return CLOSING_QUESTIONS["tired"]
+    mood_tone = {"great": "positive", "good": "positive", "happy": "positive", "calm": "positive",
+                 "low": "negative", "sad": "negative", "anxious": "negative", "stressed": "negative",
+                 "angry": "negative", "overwhelmed": "negative"}.get((mood or "").lower())
+    tone = understanding.tone(text) if text.strip() else "neutral"
+    if tone == "neutral" and mood_tone:
+        tone = mood_tone
+    return CLOSING_QUESTIONS.get(tone, CLOSING_QUESTIONS["neutral"])
+
+
+def _finish_plan(message: str, safety: dict, phase: str) -> ReflectionPlan:
+    if phase == "after":
+        return _plan(
+            "Added to your page.",
+            "",
+            "",
+            "Tap Complete journal whenever you're ready.",
+            "",
+            safety,
+            signals={"intent": "after"},
+        )
+    plan_given = not _NOTHING_RE.match(_norm(message).strip())
+    ack = (
+        "That sounds like a kind plan for yourself."
+        if plan_given
+        else "That's okay. Tomorrow can start small, and I'll suggest one easy step."
+    )
+    return _plan(
+        ack,
+        "Thank you for writing today.",
+        "",
+        "Your page is ready, with a note to yourself and one small thing for tomorrow. Tap Complete journal to see it.",
+        "",
+        safety,
+        signals={"intent": "finish"},
+    )
+
+
+def build_reflection_plan(*, phase: Optional[str] = None, **kwargs) -> ReflectionPlan:
+    """The companion's next reply. Without a phase it behaves as before (older clients)."""
+    phase = phase if phase in PHASES else None
+    message = kwargs.get("latest_user_message", "")
+    history = kwargs.get("history") or []
+    safety = kwargs.get("safety") or {}
+    unsafe = (
+        safety.get("crisis")
+        or _answers_safety_check_negatively(history, message)
+        or _contains_abuse(message)
+        or understanding.is_injection(message)
+    )
+    if phase in {"finish", "after"} and not unsafe:
+        return _finish_plan(message, safety, phase)
+
+    plan = _reflection_plan(phase=phase, **kwargs)
+    intent = (plan.signals or {}).get("intent")
+    if phase == "closing" and not plan.safety.crisis and intent not in {"injection", "abuse", "identity", "off_topic"}:
+        prior_user = [m.content for m in history if m.role == "user" and m.content.strip()]
+        if not prior_user or prior_user[-1].strip() != message.strip():
+            prior_user.append(message)
+        plan.pattern_connection = PatternConnection(text="", references=[])
+        plan.gentle_nudge = PlanSection(text="")
+        plan.follow_up_question = PlanSection(text=closing_question(prior_user, kwargs.get("mood")))
+        plan.signals = {**(plan.signals or {}), "intent": "closing"}
+    return plan
