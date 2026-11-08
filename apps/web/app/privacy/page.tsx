@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: "What DearMe collects, where it's stored, who can see it, and how to export or delete it.",
 };
 
-const UPDATED = "7 November 2026";
+const UPDATED = "8 November 2026";
 const CONTACT = "dearme.journal.app@gmail.com";
 
 const PROVIDERS: Array<{ name: string; role: string; data: string; where: string }> = [
@@ -37,9 +37,9 @@ const PROVIDERS: Array<{ name: string; role: string; data: string; where: string
     where: "Google's global infrastructure",
   },
   {
-    name: "AI reply provider",
-    role: "Only if you turn on AI replies",
-    data: "Your recent messages in that conversation and up to two short past snippets, to write the reply. Never used to train models.",
+    name: "OpenAI",
+    role: "Writes AI replies, only if you turn them on",
+    data: "Your recent messages in that conversation and up to two short past snippets, to write the reply. Not used to train its models; OpenAI may keep requests for up to 30 days to detect abuse, then deletes them.",
     where: "USA",
   },
 ];
@@ -68,7 +68,7 @@ export default function PrivacyPage() {
             <ul>
               <li>Your journal is yours. We use it only to run DearMe for you: no ads, no selling, no training AI models.</li>
               <li>Other people can&apos;t read your journal. Turn on <strong>journal lock</strong> and no one else can, including us.</li>
-              <li>Replies and insights come from DearMe&apos;s own analysis service. Outside AI is used only if you switch on AI replies.</li>
+              <li>Replies and insights come from DearMe&apos;s own analysis service. OpenAI is used only if you switch on AI replies.</li>
               <li>Everything is stored in the United States, with the providers listed below.</li>
               <li>You can export everything, or delete it for good, at any time from Settings.</li>
             </ul>
@@ -163,7 +163,7 @@ export default function PrivacyPage() {
               <li><strong>Export</strong> everything as a file: Settings → Export data.</li>
               <li><strong>Delete</strong> your journal, or your whole account: Settings and Account.</li>
               <li><strong>Memory</strong>: see what DearMe remembers, forget items, or turn memory off in Settings.</li>
-              <li><strong>AI replies</strong> are off unless you turn them on, and you can turn them off any time.</li>
+              <li><strong>AI replies</strong> (written by OpenAI) are off unless you turn them on, and you can turn them off any time.</li>
               <li><strong>Journal lock</strong>: turn on end-to-end encryption in Settings → Journal lock.</li>
               <li><strong>Correct</strong> your profile at any time in Account.</li>
             </ul>
