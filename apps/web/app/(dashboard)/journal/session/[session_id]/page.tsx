@@ -21,6 +21,7 @@ import { createEntry, getEntryForSession, listEntries, updateEntry } from "@/lib
 import { apiFetch } from "@/lib/auth";
 import CrisisResources from "@/components/crisis-resources";
 import { sentenceStarters } from "@/lib/prompts";
+import { sessionPace } from "@/lib/session-pace";
 
 export default function JournalSessionPage() {
   const router = useRouter();
@@ -44,6 +45,14 @@ export default function JournalSessionPage() {
   const [finishMessage, setFinishMessage] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<"ACTIVE" | "COMPLETED">("ACTIVE");
   const [enhancedStatus, setEnhancedStatus] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  // The time left updates every half minute.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const enhancedEnabled = profile?.preferences?.enhanced_language_enabled ?? false;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -84,6 +93,7 @@ export default function JournalSessionPage() {
         setMood(sessionData.mood ?? null);
         setTimeBudget(sessionData.time_budget ?? 5);
         setEntryDate(sessionData.entry_date ?? null);
+        setStartedAt(sessionData.created_at ?? null);
       }
     };
 
@@ -133,12 +143,14 @@ export default function JournalSessionPage() {
       return;
     }
 
+    // The phase comes from the session before this answer: explore, ask about tomorrow, or finish.
+    const phase = sessionPace(turns, timeBudget, startedAt).nextPhase;
     const nextTurns = [...turns, userTurn];
     setTurns(nextTurns);
     setInput("");
 
     try {
-      const response = await apiFetch("/api/chat/turn", { sessionId, latestUserMessage: message });
+      const response = await apiFetch("/api/chat/turn", { sessionId, latestUserMessage: message, phase });
 
       if (!response.ok) {
         let errorMessage = "We couldn't generate a response yet.";
@@ -265,6 +277,14 @@ export default function JournalSessionPage() {
     setFinishing(false);
   };
 
+  const pace = sessionPace(turns, timeBudget, startedAt, now);
+  const steps = pace.finished ? pace.total : Math.min(pace.answered, pace.total);
+  const paceLabel = pace.finished
+    ? "Done · your page is ready"
+    : pace.closingAsked
+      ? "Last step · looking ahead to tomorrow"
+      : `Step ${Math.min(pace.answered + 1, pace.total)} of ${pace.total}${pace.minutesLeft > 0 ? ` · about ${pace.minutesLeft} min left` : ""}`;
+
   return (
     <div className="grid gap-6">
       <Card className="flex h-[80vh] flex-col gap-4 p-6">
@@ -285,6 +305,29 @@ export default function JournalSessionPage() {
             </Button>
           </div>
         </div>
+
+        {sessionStatus === "ACTIVE" && !loading && (
+          <div className="space-y-1.5" aria-label="Journal progress">
+            <div
+              className="flex gap-1.5"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={pace.total}
+              aria-valuenow={steps}
+              aria-valuetext={paceLabel}
+            >
+              {Array.from({ length: pace.total }, (_, index) => (
+                <span
+                  key={index}
+                  className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${
+                    index < steps ? "bg-primary" : index === steps && !pace.finished ? "bg-primary/35" : "bg-muted"
+                  }`}
+                />
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">{paceLabel}</p>
+          </div>
+        )}
 
         <div className="flex-1 space-y-3 overflow-y-auto rounded-2xl border bg-muted/10 p-4 shadow-soft-gray">
           {loading && <p className="text-sm text-muted-foreground">Loading session...</p>}
@@ -315,6 +358,18 @@ export default function JournalSessionPage() {
         {enhancedStatus && <p className="text-sm text-muted-foreground">{enhancedStatus}</p>}
         {finishMessage && <p className="text-sm text-emerald-600">{finishMessage}</p>}
 
+        {pace.finished && sessionStatus === "ACTIVE" && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">Your page is ready</p>
+              <p className="text-xs text-muted-foreground">Written out with a note to yourself and one small thing for tomorrow.</p>
+            </div>
+            <Button size="sm" onClick={handleComplete} disabled={finishing}>
+              {finishing ? "Completing..." : "Complete journal"}
+            </Button>
+          </div>
+        )}
+
         {sessionStatus === "ACTIVE" && !turns.some((turn) => turn.role === "user") && (
           <div className="flex flex-wrap items-center gap-2" aria-label="Sentence starters">
             <span className="text-xs text-muted-foreground">Stuck? Try starting with</span>
@@ -336,7 +391,7 @@ export default function JournalSessionPage() {
           <Textarea
             ref={textareaRef}
             className="min-h-[72px]"
-            placeholder={placeholder}
+            placeholder={pace.finished ? "Anything else? It'll be added to your page." : placeholder}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             disabled={sending || sessionStatus === "COMPLETED"}

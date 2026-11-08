@@ -42,7 +42,7 @@ export default function MemoryDetailPage() {
   const [view, setView] = useState<View>("journal");
   const firstName = useProfileStore((state) => state.profile?.name?.trim().split(/\s+/)[0] ?? null);
   const story = useMemo(
-    () => composeJournal(session?.selected_prompt_text, turns, entry?.content ?? ""),
+    () => composeJournal(session?.selected_prompt_text, turns, entry?.content ?? "", entry?.mood ?? null),
     [session?.selected_prompt_text, turns, entry?.content]
   );
 
@@ -152,6 +152,7 @@ export default function MemoryDetailPage() {
               mood={entry.mood}
               timeBudget={entry.time_budget}
               signature={firstName}
+              entryId={entry.id}
             />
           ) : view === "entry" || !hasConversation ? (
             <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{entry.content}</div>

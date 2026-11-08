@@ -50,14 +50,50 @@ test("short answers turn into statements that fit the question", () => {
   assert.equal(statementFor("What's on your mind?", "Priya", new Set(["Priya"])), "What's on my mind is Priya.");
 });
 
-test("unmatched questions and yes/no answers stay as questions you asked yourself", () => {
+test("yes/no answers and unmatched questions become prose, never a question on the page", () => {
   const story = composeJournal(null, [
     turn("assistant", "Did taking a walk help at all?"),
     turn("user", "not really"),
     turn("assistant", "Where do you feel it in your body?"),
     turn("user", "my shoulders"),
+    turn("assistant", "Is it still bothering you?"),
+    turn("user", "a little"),
   ]);
-  assert.deepEqual(story.paragraphs, ["Did taking a walk help at all? Not really. Where do I feel it in my body? My shoulders."]);
+  assert.deepEqual(story.paragraphs, [
+    "Taking a walk didn't really help at all. Where I feel it in my body: my shoulders. It is still bothering me, a little.",
+  ]);
+  // "Show the questions" keeps your own words under each question.
+  assert.equal(story.passages[0].answer, "Not really.");
+});
+
+test("the session from the screenshot reads as one entry", () => {
+  const story = composeJournal("What drained your energy today, and what gave some of it back?", [
+    turn("assistant", "What drained your energy today, and what gave some of it back?"),
+    turn("user", "Just felt tired in general. Watching my favorite movie felt good."),
+    turn("assistant", "Feeling tired like that can wear you down. What has been draining your energy lately?"),
+    turn("user", "I am really not sure, my body is tired always. Even when I get enough sleep, nutrition from food."),
+    turn("assistant", "That sounds exhausting. How has it been affecting your days – your energy, your plans, or your mood?"),
+    turn("user", "Yes, it affects everything."),
+    turn("assistant", "That's a lot to carry. What part of this worries you the most?"),
+    turn("user", "When I can't do my office tasks with energy and enthusiasm and lack progress."),
+    turn(
+      "assistant",
+      "That makes sense. Before you close the page, what's one small thing that could make tomorrow a little easier on your energy?"
+    ),
+    turn("user", "I think I'll go to bed early and take a short walk after lunch"),
+    turn("assistant", "That sounds like a kind plan for yourself. Thank you for writing today. Your page is ready."),
+  ]);
+  const text = story.paragraphs.join(" ");
+  assert.ok(!text.includes("?"), "no questions in the written entry");
+  assert.ok(text.startsWith("I just felt tired in general."));
+  assert.ok(text.includes("I am really not sure what has been draining my energy lately. My body is tired always."));
+  assert.ok(text.includes("It affects everything: my energy, my plans and my mood."));
+  assert.ok(text.includes("The part that worries me the most is when I can't do my office tasks"));
+  assert.ok(!text.includes("bed early"), "the plan for tomorrow goes in the closing, not the story");
+  assert.equal(story.closing?.sentence, "To make tomorrow a little easier on my energy, I'll go to bed early and take a short walk after lunch.");
+  assert.equal(story.closing?.todo, "Go to bed early and take a short walk after lunch");
+  assert.equal(story.closing?.todoSuggested, false);
+  assert.match(story.closing?.affirmation ?? "", /rest|slow down/i);
 });
 
 test("thanks and goodbyes are left out; full sentences are kept as written", () => {

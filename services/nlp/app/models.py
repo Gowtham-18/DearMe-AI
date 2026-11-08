@@ -278,6 +278,8 @@ class ChatTurnRequestV1(BaseModel):
     enhanced_language: bool = False
     today: Optional[str] = None  # the person's local date (YYYY-MM-DD)
     memories: List[MemoryFact] = Field(default_factory=list, max_length=40)
+    # Where the session is against its time: explore, closing (ask about tomorrow), finish, after.
+    phase: Optional[str] = Field(default=None, max_length=16)
 
 
 class ChatTurnResponseV1(BaseModel):

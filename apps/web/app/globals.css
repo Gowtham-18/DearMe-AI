@@ -200,6 +200,64 @@
 .journal-paper__soft {
   color: var(--paper-ink-soft);
 }
+/* The end of the page: a line about tomorrow, one small to-do, and a note to self. */
+.journal-paper__closing {
+  margin-top: var(--lh);
+}
+.journal-paper__todo {
+  display: block;
+  margin-top: calc(var(--lh) * 0.5);
+  cursor: pointer;
+  line-height: var(--lh);
+}
+.journal-paper__todo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+.journal-paper__todo input {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: none;
+  accent-color: var(--paper-accent);
+  transform: translateY(0.12rem);
+  cursor: pointer;
+}
+.journal-paper__todo-label {
+  display: block;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--paper-ink-soft);
+}
+.journal-paper__todo-text {
+  font-size: 1.5rem;
+  color: var(--paper-ink);
+  transition: color 0.2s ease;
+}
+.journal-paper__todo-text.is-done {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  color: var(--paper-ink-soft);
+}
+.journal-paper__affirmation {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin-top: calc(var(--lh) * 0.5);
+  font-size: 1.55rem;
+  line-height: var(--lh);
+  color: var(--paper-accent);
+}
+.journal-paper__affirmation-icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  transform: translateY(0.1rem);
+  fill: currentColor;
+  opacity: 0.8;
+}
 .journal-paper__signature {
   margin-top: var(--lh);
   text-align: right;

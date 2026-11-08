@@ -188,6 +188,7 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
         allow_llm=allow_llm,
         memories=payload.memories,
         today=payload.today,
+        phase=payload.phase,
     )
 
     rendered = render_plan_to_message(plan)
@@ -197,7 +198,8 @@ def _handle_chat_turn_v1(payload: ChatTurnRequestV1) -> ChatTurnResponseV1:
     assistant_text, follow_up, mode = deterministic_text, rendered.follow_up_question, "deterministic"
     # Redirects (instruction-override attempts, abuse, off-topic requests) never go to the LLM.
     intent = (plan.signals or {}).get("intent")
-    if allow_llm and not plan.safety.crisis and intent not in {"injection", "abuse", "off_topic", "identity"}:
+    # Closing and finishing replies are fixed so the journal page can recognise them.
+    if allow_llm and not plan.safety.crisis and intent not in {"injection", "abuse", "off_topic", "identity", "closing", "finish", "after"}:
         signals_for_llm = plan.signals or {}
         generated = generate_reply(
             message=message,
