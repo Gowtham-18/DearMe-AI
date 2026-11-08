@@ -16,6 +16,8 @@ export type StoryPassage = { question: string | null; text: string };
 export type JournalStory = {
   /** The opening prompt, in the first person ("What's on my mind today?"). */
   opening: string | null;
+  /** True when the first answer already says the prompt in its own sentence, so the page needn't repeat it. */
+  openingJoined: boolean;
   passages: StoryPassage[];
   paragraphs: string[];
 };
@@ -50,7 +52,9 @@ const CLAUSE_WORDS = new Set(
   (
     "i i'm i've i'd i'll we we're he she they it's there's that's am is are was were been be do does did " +
     "have has had feel feels felt want wanted need needed think thought know knew can could will would " +
-    "should might must get got go went make made keep kept love hate hope wish try tried"
+    "should might must get got go went make made keep kept love hate hope wish try tried keeps says thinks wants " +
+    "needs gets goes makes takes seems looks don't didn't doesn't can't couldn't won't wasn't isn't aren't weren't " +
+    "hasn't haven't hadn't shouldn't wouldn't"
   ).split(" ")
 );
 
@@ -65,7 +69,7 @@ const VERBS_AFTER_YOU = new Set(
 const IRREGULAR_PAST = new Set(
   (
     "was were did had made felt got took kept left went said came brought thought wore tore broke gave told " +
-    "began stood drove ran ate wrote spoke chose fell forgot lost met paid sent spent taught won woke heard " +
+    "hurt began stood drove ran ate wrote spoke chose fell forgot lost met paid sent spent taught won woke heard " +
     "held led meant sat slept threw caught fought bought found sold built"
   ).split(" ")
 );
@@ -129,6 +133,7 @@ export function isFragment(text: string): boolean {
     .split(/\s+/)
     .filter(Boolean);
   if (words.length === 0 || words.length > 12) return false;
+  if (soundsPast(words.join(" ")) && words.length > 2) return false; // "she learned to sit"
   return !words.some((word) => CLAUSE_WORDS.has(word) || CLAUSE_WORDS.has(word.replace(/'.*$/, "")));
 }
 
@@ -164,7 +169,8 @@ export function toFirstPerson(question: string): string {
     /\byou\b(\s+(\w+))?/gi,
     (_match, rest: string | undefined, next: string | undefined, offset: number, whole: string) => {
       const startsSentence = offset === 0 || /[.!?]\s*$/.test(whole.slice(0, offset));
-      const subject = startsSentence || (next !== undefined && VERBS_AFTER_YOU.has(next.toLowerCase()));
+      const afterCausative = /\b(made|make|makes|let|lets|help|helps|helped|got|get|gets|have|had)\s*$/i.test(whole.slice(0, offset));
+      const subject = !afterCausative && (startsSentence || (next !== undefined && VERBS_AFTER_YOU.has(next.toLowerCase())));
       return `${subject ? "I" : "me"}${rest ?? ""}`;
     }
   );
@@ -213,6 +219,14 @@ export function statementFor(question: string, answer: string, names: Set<string
   if (!q || !a) return null;
   let m: RegExpMatchArray | null;
 
+  // "What made you feel heavy today?" + "my interview" -> "I felt heavy today because of my interview."
+  if ((m = q.match(/^what (?:made|makes) I feel (.+)$/i)) || (m = q.match(/^what (?:made|makes) me feel (.+)$/i))) {
+    return `I felt ${m[1]} because of ${a}.`;
+  }
+  if ((m = q.match(/^what (?:made|makes) (today|it|this|that|the day|this week|work|tonight) (.+)$/i))) {
+    return `${capitalize(m[1])} was ${m[2]} because of ${a}.`;
+  }
+  if ((m = q.match(/^what (?:made|makes) me (.+)$/i))) return `${capitalize(a)} made me ${m[1]}.`;
   // "What's been the hardest part of it?" -> "The hardest part of it has been ..."
   if ((m = q.match(/^what(?:'s been| has been|'s| is| was) (the|my|a|an) (.+)$/i))) {
     const aux = /'s been|has been/i.test(q) ? "has been" : /^what was/i.test(q) ? "was" : "is";
@@ -246,6 +260,11 @@ export function statementFor(question: string, answer: string, names: Set<string
   if ((m = q.match(/^who (could|can|would|might) I (.+)$/i))) {
     return `Someone I ${m[1].toLowerCase()} ${m[2]} is ${a}.`;
   }
+  // "What part of it hurt the most?" -> "The part that hurt the most was ..."
+  const part = partQuestion(q);
+  if (part) return `${part.lead} ${part.aux} ${a}.`;
+  // "What's been happening?" / "What happened?" have no tidy statement form.
+  if (/^what(?:'s been| has been| was| is)? (happening|going on)\b|^what happened\b/i.test(q)) return null;
   // Subject questions: "What drained you the most?" -> "What drained me the most was ..."
   if ((m = q.match(/^what(?!\s+(?:did|am|was|have|had|should)\s+I\b)(\S*)\s+(.+)$/i)) && !/^what (do|did|would|could|can|might|will) I\b/i.test(q)) {
     const clause = `What${m[1]} ${m[2]}`;
@@ -255,15 +274,97 @@ export function statementFor(question: string, answer: string, names: Set<string
   return null;
 }
 
-function passageFor(question: string | null, answer: string, names: Set<string>): string {
+// Small, common slips that read oddly once the words become a written page.
+const GRAMMAR_FIXES: Array<[RegExp, string]> = [
+  [/\b(performed|did|went|played|scored|slept|spoke|presented)\s+bad\b/gi, "$1 badly"],
+  [/\b(in|at|after|before|during)\s+(interview|meeting|exam|presentation|party)\b/gi, "$1 the $2"],
+];
+
+function polish(text: string): string {
+  return GRAMMAR_FIXES.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement), text);
+}
+
+const PAST_HINT = /\b(went|made|happened|was|were|did|got|felt|took|came|today|yesterday|this morning|tonight)\b/i;
+const PART_RE =
+  /^what part(?: of ([\w' ]+?))? ((?:wore|hurt|hurts|made|makes|felt|feels|was|is|has|stressed|bothered|worried|annoyed|upset|scared|drained|stayed|stays|stuck|weighs|weighed)\b.*)$/i;
+
+/** "What part of work wore me out the most" -> lead "The part of work that wore me out the most", aux "was". */
+function partQuestion(q: string): { lead: string; aux: string } | null {
+  const m = q.match(PART_RE);
+  if (!m) return null;
+  const of = m[1] && !/^(it|this|that)$/i.test(m[1]) ? ` of ${m[1]}` : "";
+  return { lead: `The part${of} that ${m[2]}`, aux: soundsPast(m[2]) ? "was" : "is" };
+}
+
+/**
+ * Join a full-sentence answer to the question it answers, so the page reads as one thought:
+ * "What made you feel heavy today?" + "I performed bad in interview"
+ *   -> "I felt heavy today because I performed badly in the interview."
+ * Returns null when the question doesn't have a natural statement form.
+ */
+export function clauseStatementFor(question: string, answer: string, names: Set<string> = new Set()): string | null {
+  const q = toFirstPerson(question)
+    .replace(/^(and|so|okay|ok|then),?\s+/i, "")
+    .replace(/\?+$/, "")
+    .trim();
+  const sentences = normalizeSpace(answer).split(/(?<=[.!?])\s+/);
+  const first = sentences[0] ?? "";
+  if (!q || !first || wordCount(first) > 15 || /\?$/.test(first)) return null;
+  const clause = polish(answerForSentence(first.replace(/^because\s+/i, ""), names));
+  const rest = sentences.slice(1).join(" ");
+  const finish = (sentence: string) => (rest ? `${endWithPunctuation(sentence)} ${tidy(polish(rest))}` : endWithPunctuation(sentence));
+  let m: RegExpMatchArray | null;
+
+  // "What made you feel heavy today?" -> "I felt heavy today because ..."
+  if ((m = q.match(/^what (?:made|makes) me feel (.+)$/i))) return finish(`I felt ${m[1]} because ${clause}`);
+  // "What made today hard?" -> "Today was hard because ..."
+  if ((m = q.match(/^what (?:made|makes) (today|it|this|that|the day|this week|work|tonight) (.+)$/i))) {
+    return finish(`${capitalize(m[1])} was ${m[2]} because ${clause}`);
+  }
+  // "What made you smile today?" -> "What made me smile today was that ..."
+  if ((m = q.match(/^what (made|makes) me (.+)$/i))) return finish(`What ${m[1].toLowerCase()} me ${m[2]} was that ${clause}`);
+  // "What's one small thing that went right today?" -> "One small thing that went right today was that ..."
+  if ((m = q.match(/^what(?:'s| is| was) one (.+)$/i))) {
+    return finish(`One ${m[1]} ${PAST_HINT.test(m[1]) ? "was" : "is"} that ${clause}`);
+  }
+  // "What's been the hardest part?" -> "The hardest part has been that ..."
+  if ((m = q.match(/^what(?:'s been| has been|'s| is| was) (the|my) (.+)$/i))) {
+    const aux = /'s been|has been/i.test(q) ? "has been" : /^what was/i.test(q) ? "was" : "is";
+    return finish(`${capitalize(m[1].toLowerCase())} ${m[2]} ${aux} that ${clause}`);
+  }
+  // "What do you wish you'd said?" -> "What I wish I'd said is that ..."
+  if ((m = q.match(/^what (do|would|could|can|might|will) I (.+)$/i))) {
+    const modal = m[1].toLowerCase();
+    const lead = modal === "do" ? `What I ${m[2]}` : `What I ${modal} ${m[2]}`;
+    const link = /^that\b/i.test(clause) ? "" : "that ";
+    return finish(`${lead} is ${link}${clause}`);
+  }
+  const part = partQuestion(q);
+  if (part) return finish(`${part.lead} ${part.aux} that ${clause}`);
+  // "What drained you today?" -> "What drained me today was that ..."
+  if ((m = q.match(/^what (drained|helped|surprised|hurt|annoyed|upset|worried|stressed|scared|bothered|gave) me(.*)$/i))) {
+    return finish(`What ${m[1].toLowerCase()} me${m[2]} was that ${clause}`);
+  }
+  return null;
+}
+
+/** The written passage for one answer, and whether the question was woven into it. */
+function passageFor(question: string | null, answer: string, names: Set<string>): { text: string; joined: boolean } {
   const yesNo = YES_NO_RE.test(answer.trim());
   if (question && (yesNo || isFragment(answer))) {
     const statement = yesNo ? null : statementFor(question, answer, names);
-    if (statement) return statement;
+    if (statement) return { text: polish(statement), joined: true };
     // Keep it as a question asked of yourself.
-    return `${capitalize(toFirstPerson(question).replace(/\?*$/, "?"))} ${capitalize(answerForSentence(answer, names))}.`;
+    return {
+      text: `${capitalize(toFirstPerson(question).replace(/\?*$/, "?"))} ${capitalize(answerForSentence(answer, names))}.`,
+      joined: true,
+    };
   }
-  return tidy(answer);
+  if (question) {
+    const joined = clauseStatementFor(question, answer, names);
+    if (joined) return { text: joined, joined: true };
+  }
+  return { text: tidy(polish(answer)), joined: false };
 }
 
 /** Build the journal piece for one entry. */
@@ -271,6 +372,7 @@ export function composeJournal(prompt: string | null | undefined, turns: StoryTu
   const opening = prompt?.trim() ? toFirstPerson(prompt.trim()) : null;
   const userTurns = turns.filter((turn) => turn.role === "user" && turn.content.trim());
   const passages: StoryPassage[] = [];
+  let openingJoined = false;
 
   if (userTurns.length === 0) {
     for (const block of fallbackText.split(/\n\s*\n/)) {
@@ -290,7 +392,9 @@ export function composeJournal(prompt: string | null | undefined, turns: StoryTu
         question = null;
         continue;
       }
-      passages.push({ question, text: passageFor(question, content, names) });
+      const passage = passageFor(question, content, names);
+      if (passages.length === 0 && question && question === (prompt?.trim() || null)) openingJoined = passage.joined;
+      passages.push({ question, text: passage.text });
       question = null;
     }
   }
@@ -305,5 +409,5 @@ export function composeJournal(prompt: string | null | undefined, turns: StoryTu
       paragraphs.push(passage.text);
     }
   }
-  return { opening, passages, paragraphs };
+  return { opening, openingJoined, passages, paragraphs };
 }

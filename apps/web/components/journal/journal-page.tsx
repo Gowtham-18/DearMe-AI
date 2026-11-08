@@ -40,7 +40,7 @@ export default function JournalPage({ story, entryDate, mood, timeBudget, signat
   const hasQuestions = story.passages.some((passage) => passage.question);
   const empty = story.paragraphs.length === 0;
 
-  const plainText = [story.opening, ...story.paragraphs].filter(Boolean).join("\n\n");
+  const plainText = [story.openingJoined ? null : story.opening, ...story.paragraphs].filter(Boolean).join("\n\n");
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(plainText);
@@ -82,7 +82,7 @@ export default function JournalPage({ story, entryDate, mood, timeBudget, signat
           </p>
         </header>
 
-        {story.opening && <p className="journal-paper__opening">{story.opening}</p>}
+        {story.opening && (!story.openingJoined || showQuestions) && <p className="journal-paper__opening">{story.opening}</p>}
 
         {empty ? (
           <p className="journal-paper__soft">Nothing was written in this entry.</p>
@@ -92,12 +92,16 @@ export default function JournalPage({ story, entryDate, mood, timeBudget, signat
               {passage.question && index > 0 && (
                 <p className={`${hand.className} journal-paper__question`}>{toFirstPerson(passage.question)}</p>
               )}
-              <p className="journal-paper__text">{passage.text}</p>
+              <p className={`${hand.className} journal-paper__text journal-paper__hand`}>{passage.text}</p>
             </div>
           ))
         ) : (
           story.paragraphs.map((paragraph, index) => (
-            <p key={index} className="journal-paper__text journal-paper__text--indent">
+            <p
+              key={index}
+              className={`${hand.className} journal-paper__text journal-paper__text--indent journal-paper__hand journal-paper__ink`}
+              style={{ animationDelay: `${Math.min(index, 6) * 0.35}s` }}
+            >
               {paragraph}
             </p>
           ))
@@ -106,8 +110,8 @@ export default function JournalPage({ story, entryDate, mood, timeBudget, signat
         {signature && !empty && <p className={`${hand.className} journal-paper__signature`}>— {signature}</p>}
       </article>
       <p className="text-xs text-muted-foreground">
-        Put together on your device from what you wrote. Your words are kept; short answers are joined to the
-        question they answer. No AI service sees this.
+        Written out on your device from your answers, woven into the questions they answer so the page reads as one
+        entry. Your own words are kept. No AI service sees this.
       </p>
     </div>
   );
